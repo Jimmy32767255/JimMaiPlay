@@ -84,14 +84,14 @@ namespace MajdataPlay.Scenes.Result
             intractSender.Init(song);
             favoriteAdder.SetSong(song);
 
-            if (result.Acc.DX < 97)
+            if (result.Acc.DX < 80)
             {
-                omg.text = "您输了";
+                omg.text = "";
                 xxlb.GetComponent<Animator>().SetTrigger("Bad");
             }
             else
             {
-                omg.text = "您赢了";
+                omg.text = "通关！";
                 xxlb.GetComponent<Animator>().SetTrigger("Good");
             }
 

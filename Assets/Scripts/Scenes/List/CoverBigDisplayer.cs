@@ -137,22 +137,22 @@ namespace MajdataPlay.Scenes.List
                 if (score.ComboState == ComboState.APPlus)
                 {
                     _APbg.SetActive(true);
-                    _clearMark.text = "AP+";
+                    _clearMark.text = "全完美加";
                 }
                 else if (score.ComboState == ComboState.AP)
                 {
                     _APbg.SetActive(true);
-                    _clearMark.text = "AP";
+                    _clearMark.text = "全完美";
                 }
                 else if (score.ComboState == ComboState.FCPlus)
                 {
                     _APbg.SetActive(true);
-                    _clearMark.text = "FC+";
+                    _clearMark.text = "满连击加";
                 }
                 else if (score.ComboState == ComboState.FC)
                 {
                     _APbg.SetActive(true);
-                    _clearMark.text = "FC";
+                    _clearMark.text = "满连击";
                 }
                 var dxacc = score.Acc.DX;
                 var rank = _rank;
@@ -180,9 +180,37 @@ namespace MajdataPlay.Scenes.List
                 {
                     rank.text = "S";
                 }
+                else if (dxacc >= 94f)
+                {
+                    rank.text = "AAA";
+                }
+                else if (dxacc >= 90f)
+                {
+                    rank.text = "AA";
+                }
+                else if (dxacc >= 80f)
+                {
+                    rank.text = "A";
+                }
+                else if (dxacc >= 75f)
+                {
+                    rank.text = "BBB";
+                }
+                else if (dxacc >= 70f)
+                {
+                    rank.text = "BB";
+                }
+                else if (dxacc >= 60f)
+                {
+                    rank.text = "B";
+                }
+                else if (dxacc >= 50f)
+                {
+                    rank.text = "C";
+                }
                 else
                 {
-                    _rank.text = "";
+                    rank.text = "D";
                 }
             }
         }
