@@ -238,6 +238,38 @@ namespace MajdataPlay.Scenes.Result
                     lastSample = MajInstances.AudioManager.PlaySFX("S.wav")!;
                     rank.text = "S";
                 }
+                else if (dxacc >= 94f)
+                {
+                    rank.text = "AAA";
+                }
+                else if (dxacc >= 90f)
+                {
+                    rank.text = "AA";
+                }
+                else if (dxacc >= 80f)
+                {
+                    rank.text = "A";
+                }
+                else if (dxacc >= 75f)
+                {
+                    rank.text = "BBB";
+                }
+                else if (dxacc >= 70f)
+                {
+                    rank.text = "BB";
+                }
+                else if (dxacc >= 60f)
+                {
+                    rank.text = "B";
+                }
+                else if (dxacc >= 50f)
+                {
+                    rank.text = "C";
+                }
+                else
+                {
+                    rank.text = "D";
+                }
 
                 while (lastSample != null && lastSample.IsPlaying)
                 {
