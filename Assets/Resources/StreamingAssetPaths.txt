@@ -1,5 +1,6 @@
 Langs\en-US.json
 Langs\ja-JP.json
+Langs\zh-CHS-Jimmy.json
 Langs\zh-CN.json
 Langs\zh-TW.json
 Mods\mod.json
