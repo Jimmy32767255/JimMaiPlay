@@ -164,7 +164,7 @@
     },
     {
       "Origin": "MAJSETTING_PROPERTY_AudioOffset",
-      "Content": "音频偏移(A判)"
+      "Content": "判定调整A"
     },
     {
       "Origin": "MAJSETTING_PROPERTY_AudioOffset_DESC",
@@ -172,7 +172,7 @@
     },
     {
       "Origin": "MAJSETTING_PROPERTY_JudgeOffset",
-      "Content": "判定偏移(B判)"
+      "Content": "判定调整B"
     },
     {
       "Origin": "MAJSETTING_PROPERTY_JudgeOffset_DESC",
@@ -188,79 +188,79 @@
     },
     {
       "Origin": "MAJSETTING_PROPERTY_Skin",
-      "Content": "Note皮肤"
+      "Content": "音符皮肤"
     },
     {
       "Origin": "MAJSETTING_PROPERTY_Skin_DESC",
-      "Content": "更换Note使用的皮肤"
+      "Content": "更换音符的皮肤"
     },
     {
       "Origin": "MAJSETTING_PROPERTY_DisplayCriticalPerfect",
-      "Content": "显示Critical判定"
+      "Content": "显示非常完美判定"
     },
     {
       "Origin": "MAJSETTING_PROPERTY_DisplayCriticalPerfect_DESC",
-      "Content": "开启后，将会显示Critical判定"
+      "Content": "开启后，将会显示非常完美判定"
     },
     {
       "Origin": "MAJSETTING_PROPERTY_DisplayBreakScore",
-      "Content": "显示Break分数"
+      "Content": "显示绝赞豪华分数"
     },
     {
       "Origin": "MAJSETTING_PROPERTY_DisplayBreakScore_DESC",
-      "Content": "开启后，会显示Break类Note的详细得分"
+      "Content": "开启后，会显示绝赞类音符的详细得分"
     },
     {
       "Origin": "MAJSETTING_PROPERTY_FastLateType",
-      "Content": "Fast/Late显示等级"
+      "Content": "快/慢显示等级"
     },
     {
       "Origin": "MAJSETTING_PROPERTY_FastLateType_DESC",
-      "Content": "控制Note的Fast/Late显示级别\n不符合条件的判定结果将不会显示\n影响Tap、Hold、Touch、TouchHold"
+      "Content": "控制音符的快/慢显示级别\n不符合条件的判定结果将不会显示\n影响点击、长按、触摸、触摸长按音符"
     },
     {
       "Origin": "MAJSETTING_PROPERTY_NoteJudgeType",
-      "Content": "Note判定显示等级"
+      "Content": "音符判定显示等级"
     },
     {
       "Origin": "MAJSETTING_PROPERTY_NoteJudgeType_DESC",
-      "Content": "控制Note的判定显示级别\n不符合条件的判定结果将不会显示\n影响Tap、Hold"
+      "Content": "控制音符的判定显示级别\n不符合条件的判定结果将不会显示\n影响点击、长按音符"
     },
     {
       "Origin": "MAJSETTING_PROPERTY_TouchJudgeType",
-      "Content": "Touch判定显示等级"
+      "Content": "触摸音符判定显示等级"
     },
     {
       "Origin": "MAJSETTING_PROPERTY_TouchJudgeType_DESC",
-      "Content": "控制Touch的判定显示级别\n不符合条件的判定结果将不会显示\n影响Touch、TouchHold"
+      "Content": "控制触摸音符的判定显示级别\n不符合条件的判定结果将不会显示\n影响触摸、触摸长按音符"
     },
     {
       "Origin": "MAJSETTING_PROPERTY_SlideJudgeType",
-      "Content": "Slide判定显示等级"
+      "Content": "滑动音符判定显示等级"
     },
     {
       "Origin": "MAJSETTING_PROPERTY_SlideJudgeType_DESC",
-      "Content": "控制Slide的判定显示级别\n不符合条件的判定结果将不会显示\n影响Slide、Wifi"
+      "Content": "控制滑动音符的判定显示级别\n不符合条件的判定结果将不会显示\n影响滑动、Wifi音符"
     },
     {
       "Origin": "MAJSETTING_PROPERTY_BreakJudgeType",
-      "Content": "Break判定显示等级"
+      "Content": "绝赞判定显示等级"
     },
     {
       "Origin": "MAJSETTING_PROPERTY_BreakJudgeType_DESC",
-      "Content": "控制Break的判定显示级别\n不符合条件的判定结果将不会显示\n影响Tap、Hold、Touch、TouchHold"
+      "Content": "控制绝赞的判定显示级别\n不符合条件的判定结果将不会显示\n影响Tap、Hold、Touch、TouchHold"
     },
     {
       "Origin": "MAJSETTING_PROPERTY_BreakFastLateType",
-      "Content": "Break Fast/Late显示等级"
+      "Content": "绝赞快/慢显示等级"
     },
     {
       "Origin": "MAJSETTING_PROPERTY_BreakFastLateType_DESC",
-      "Content": "控制Break的FAST/LATE显示级别\n不符合条件的判定结果将不会显示\n影响Break Tap、Hold"
+      "Content": "控制绝赞的快/慢显示级别\n不符合条件的判定结果将不会显示\n影响Break Tap、Hold"
     },
     {
       "Origin": "MAJSETTING_PROPERTY_SlideSortOrder",
-      "Content": "Slide排列顺序"
+      "Content": "滑动音符排列顺序"
     },
     {
       "Origin": "MAJSETTING_PROPERTY_SlideSortOrder_DESC",
@@ -272,7 +272,7 @@
     },
     {
       "Origin": "MAJSETTING_PROPERTY_InnerJudgeDistance_DESC",
-      "Content": "调整Touch判定结果的显示位置\n数值越小越靠近中心"
+      "Content": "调整触摸音符判定结果的显示位置\n数值越小越靠近中心"
     },
     {
       "Origin": "MAJSETTING_PROPERTY_OuterJudgeDistance",
@@ -344,7 +344,7 @@
     },
     {
       "Origin": "MAJSETTING_PROPERTY_Answer_DESC",
-      "Content": "Nothing"
+      "Content": ""
     },
     {
       "Origin": "MAJSETTING_PROPERTY_BGM",
@@ -352,7 +352,7 @@
     },
     {
       "Origin": "MAJSETTING_PROPERTY_BGM_DESC",
-      "Content": "Nothing"
+      "Content": ""
     },
     {
       "Origin": "MAJSETTING_PROPERTY_Track",
@@ -360,7 +360,7 @@
     },
     {
       "Origin": "MAJSETTING_PROPERTY_Track_DESC",
-      "Content": "Nothing"
+      "Content": ""
     },
     {
       "Origin": "MAJSETTING_PROPERTY_Tap",
@@ -368,7 +368,7 @@
     },
     {
       "Origin": "MAJSETTING_PROPERTY_Tap_DESC",
-      "Content": "Nothing"
+      "Content": ""
     },
     {
       "Origin": "MAJSETTING_PROPERTY_Slide",
@@ -376,7 +376,7 @@
     },
     {
       "Origin": "MAJSETTING_PROPERTY_Slide_DESC",
-      "Content": "Nothing"
+      "Content": ""
     },
     {
       "Origin": "MAJSETTING_PROPERTY_Break",
@@ -384,7 +384,7 @@
     },
     {
       "Origin": "MAJSETTING_PROPERTY_Break_DESC",
-      "Content": "Nothing"
+      "Content": ""
     },
     {
       "Origin": "MAJSETTING_PROPERTY_Touch",
@@ -392,7 +392,7 @@
     },
     {
       "Origin": "MAJSETTING_PROPERTY_Touch_DESC",
-      "Content": "Nothing"
+      "Content": ""
     },
     {
       "Origin": "MAJSETTING_PROPERTY_Voice",
@@ -400,7 +400,7 @@
     },
     {
       "Origin": "MAJSETTING_PROPERTY_Voice_DESC",
-      "Content": "Nothing"
+      "Content": ""
     },
     {
       "Origin": "MAJSETTING_PROPERTY_DisplaySensor",
@@ -424,7 +424,7 @@
     },
     {
       "Origin": "MAJSETTING_PROPERTY_FullScreen_DESC",
-      "Content": "Nothing"
+      "Content": ""
     },
     {
       "Origin": "MAJSETTING_PROPERTY_TryFixAudioSync",
@@ -520,7 +520,7 @@
     },
     {
       "Origin": "UseKeyboardHint",
-      "Content": "拿出你的键盘使劲的敲啊..."
+      "Content": "请输入文本"
     },
     {
       "Origin": "Sort",
@@ -588,11 +588,11 @@
     },
     {
       "Origin": "MAJSETTING_PROPERTY_AllBreak",
-      "Content": "全Break"
+      "Content": "全绝赞"
     },
     {
       "Origin": "MAJSETTING_PROPERTY_AllBreak_DESC",
-      "Content": "所有音符全部变成Break"
+      "Content": "所有音符全部变成绝赞"
     },
     {
       "Origin": "MAJSETTING_PROPERTY_AllEx",
@@ -928,7 +928,7 @@
     },
     {
       "Origin": "MAJSETTING_PROPERTY_TrackVolumeOffset_DESC",
-      "Content": "Nothing"
+      "Content": ""
     }
   ]
 }
