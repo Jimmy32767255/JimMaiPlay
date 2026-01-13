@@ -161,16 +161,16 @@ namespace MajdataPlay.Scenes.Result
             {
                 if (breakJudgeInfo.IsTheoretical)
                 {
-                    clearLogo.GetComponentInChildren<TextMeshProUGUI>().text = "AP+";
+                    clearLogo.GetComponentInChildren<TextMeshProUGUI>().text = "全完美加";
                 }
                 else
                 {
-                    clearLogo.GetComponentInChildren<TextMeshProUGUI>().text = "AP";
+                    clearLogo.GetComponentInChildren<TextMeshProUGUI>().text = "全完美";
                 }
             }
             else if (totalJudgeRecord.IsFullComboPlus)
             {
-                clearLogo.GetComponentInChildren<TextMeshProUGUI>().text = "FC+";
+                clearLogo.GetComponentInChildren<TextMeshProUGUI>().text = "满连击加";
             }
 
             MajInstances.AudioManager.PlaySFX("bgm_result.mp3", true);
