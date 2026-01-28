@@ -315,7 +315,7 @@ MonoBehaviour:
     m_HorizontalOverflow: 0
     m_VerticalOverflow: 0
     m_LineSpacing: 1
-  m_Text: 1.2345
+  m_Text: "\u6B63\u5728\u52A0\u8F7D"
 --- !u!114 &4043234904956177783
 MonoBehaviour:
   m_ObjectHideFlags: 0
@@ -410,7 +410,7 @@ MonoBehaviour:
     m_HorizontalOverflow: 0
     m_VerticalOverflow: 0
     m_LineSpacing: 1
-  m_Text: 1.2345
+  m_Text: "\u6B63\u5728\u52A0\u8F7D"
 --- !u!114 &5806865103546381538
 MonoBehaviour:
   m_ObjectHideFlags: 0
@@ -477,8 +477,8 @@ MonoBehaviour:
   m_Script: {fileID: 11500000, guid: 6c6ad208514d9944682be6c3d5c5b1b8, type: 3}
   m_Name: 
   m_EditorClassIdentifier: 
-  timeText: {fileID: 336892666909178932}
-  rTimeText: {fileID: 2574214152436060246}
+  timeText: {fileID: 0}
+  rTimeText: {fileID: 0}
   progress: {fileID: 4207745269876274133}
 --- !u!1 &7999435294328766629
 GameObject:
