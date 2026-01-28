@@ -79,15 +79,7 @@ MonoBehaviour:
     m_HorizontalOverflow: 0
     m_VerticalOverflow: 0
     m_LineSpacing: 1
-  m_Text: 'asdjasdjhaskjdhaksjdh
-
-    aksjdhaksjdhaksjdh
-
-    kajshdsakjdhaksjd
-
-    kajshdkajsdhkasjdh
-
-    akjsdhkajdhadakjsdhkajhdakjsdhakjhdak'
+  m_Text: "\u6B63\u5728\u52A0\u8F7D"
 --- !u!114 &3265452433697327105
 MonoBehaviour:
   m_ObjectHideFlags: 0

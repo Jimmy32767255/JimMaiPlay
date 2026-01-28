@@ -216,7 +216,7 @@ MonoBehaviour:
   m_OnCullStateChanged:
     m_PersistentCalls:
       m_Calls: []
-  m_text: "\u767A\u72C2\u521D\u6BB5"
+  m_text: "\u6B63\u5728\u52A0\u8F7D"
   m_isRightToLeft: 0
   m_fontAsset: {fileID: 11400000, guid: a014c8b097dfdb24997585b34c61b2ca, type: 2}
   m_sharedMaterial: {fileID: -3293904412965985367, guid: a014c8b097dfdb24997585b34c61b2ca, type: 2}
@@ -254,20 +254,23 @@ MonoBehaviour:
   m_VerticalAlignment: 512
   m_textAlignment: 65535
   m_characterSpacing: 0
+  m_characterHorizontalScale: 1
   m_wordSpacing: 0
   m_lineSpacing: 0
   m_lineSpacingMax: 0
   m_paragraphSpacing: 0
   m_charWidthMaxAdj: 50
-  m_enableWordWrapping: 1
+  m_TextWrappingMode: 1
   m_wordWrappingRatios: 0.4
   m_overflowMode: 1
   m_linkedTextComponent: {fileID: 0}
   parentLinkedComponent: {fileID: 0}
   m_enableKerning: 1
+  m_ActiveFontFeatures: 6e72656b
   m_enableExtraPadding: 0
   checkPaddingRequired: 0
   m_isRichText: 1
+  m_EmojiFallbackSupport: 1
   m_parseCtrlCharacters: 1
   m_isOrthographic: 1
   m_isCullingEnabled: 0
@@ -422,3 +425,4 @@ MonoBehaviour:
   m_EditorClassIdentifier: 
   _folderText: {fileID: 7734258577827090023}
   _icon: {fileID: 1785469138811009723}
+  _danIcon: {fileID: 0}
