@@ -34,12 +34,16 @@ namespace MajdataPlay.Scenes.Setting
         static int _fromListRequest = NO_REQUEST;
 
         readonly SettingConfig _settingConfig = MajEnv.RuntimeConfig?.Setting ?? new();
+        void Awake()
+        {
+            InputManager.TouchButtonRingEdge = 4.8f;
+        }
         void Start()
         {
             var fromListRequest = _fromListRequest;
             var type = Setting.GetType();
             var properties = type.GetProperties()
-                                 .Where(x => x.GetCustomAttributes<SettingVisualizationIgnoreAttribute>().Count() == 0)
+                                 .Where(x => x.GetCustomAttributes<HideInSettingUIAttribute>().Count() == 0)
                                  .ToArray();
             var offset = 0;
 
@@ -256,6 +260,8 @@ namespace MajdataPlay.Scenes.Setting
         private void OnDestroy()
         {
             _isExited = true;
+            InputManager.TouchButtonRingEdge = 5.4f;
+            GameManager.RequestSave(this);
             GC.Collect();
         }
     }

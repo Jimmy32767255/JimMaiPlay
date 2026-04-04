@@ -1,27 +1,27 @@
-using UnityEngine;
 using System.IO;
 using System.Collections.Generic;
-using MajdataPlay.Extensions;
-using Cysharp.Threading.Tasks;
 using System.Threading.Tasks;
 using System.Runtime.CompilerServices;
-using MajdataPlay.Utils;
-
 using ManagedBass;
-using ManagedBass.Wasapi;
 using ManagedBass.Mix;
+#if UNITY_STANDALONE_WIN
+using ManagedBass.Wasapi;
 using ManagedBass.Asio;
+#endif
+using UnityEngine;
 using UnityEngine.Profiling;
-using UnityEditor;
 using System;
 using System.Linq;
-using MajdataPlay.Collections;
 using System.Text;
-using MajdataPlay.Settings;
 using System.Runtime.InteropServices;
 using System.Threading;
 using AOT;
+using MajdataPlay.Extensions;
+using MajdataPlay.Utils;
+using MajdataPlay.Collections;
+using MajdataPlay.Settings;
 using MajdataPlay.Numerics;
+using Cysharp.Threading.Tasks;
 
 
 #nullable enable
@@ -34,11 +34,13 @@ namespace MajdataPlay.IO
         string SFXFilePath;
         string VoiceFilePath;
         string[] SFXFileNames = new string[0];
-        string[] VoiceFileNames = new string [0];
+        string[] VoiceFileNames = new string[0];
         private List<AudioSampleWrap> SFXSamples = new();
 
+#if UNITY_STANDALONE_WIN
         readonly static WasapiProcedure _wasapiProcedure;
         readonly static AsioProcedure _asioProcedure;
+#endif
         private static int BassGlobalMixer = -114514;
 
         public bool PlayDebug;
@@ -48,6 +50,7 @@ namespace MajdataPlay.IO
 
         unsafe static AudioManager()
         {
+#if UNITY_STANDALONE_WIN
 #if ENABLE_IL2CPP
             _wasapiProcedure = WasapiProcedure;
             _asioProcedure = AsioProcedure;
@@ -59,6 +62,7 @@ namespace MajdataPlay.IO
 
             _wasapiProcedure = Marshal.GetDelegateForFunctionPointer<WasapiProcedure>((IntPtr)ptr1);
             _asioProcedure = Marshal.GetDelegateForFunctionPointer<AsioProcedure>((IntPtr)ptr2);
+#endif
 #endif
         }
         void Awake()
@@ -109,44 +113,41 @@ namespace MajdataPlay.IO
 
                 var backend = MajInstances.Settings.Audio.Backend;
                 var isBass = backend is (SoundBackendOption.BassSimple or SoundBackendOption.Asio or SoundBackendOption.Wasapi);
-#if !UNITY_ANDROID
+#if UNITY_STANDALONE
                 var wasapiOptions = MajInstances.Settings.Audio.Wasapi;
                 var asioOptions = MajInstances.Settings.Audio.Asio;
                 var isExclusiveRequest = wasapiOptions.Exclusive;
                 var deviceIndex = asioOptions.DeviceIndex;
-                var mainChannel = MajInstances.Settings.Audio.Channel.Main;
-                var isValidCh = mainChannel is ("Front" or "Rear" or "Side" or "CenterAndLFE");
                 var isRawMode = wasapiOptions.RawMode;
-                if (!isValidCh)
+#endif
+#if !UNITY_EDITOR && UNITY_STANDALONE
+                if (MajEnv.Mode == RunningMode.View)
                 {
-                    MajDebug.LogWarning($"Invalid sound card channel: \"{mainChannel}\"");
-                    mainChannel = "Front";
-                    MajInstances.Settings.Audio.Channel.Main = mainChannel;
+                    backend = SoundBackendOption.Wasapi;
+                    isExclusiveRequest = false;
                 }
 #endif
-#if !UNITY_EDITOR && !UNITY_ANDROID
-            if (MajEnv.Mode == RunningMode.View)
-            {
-                backend = SoundBackendOption.Wasapi;
-                isExclusiveRequest = false;
-            }
-#endif
-#if UNITY_ANDROID
-                switch(backend)
+#if UNITY_ANDROID || UNITY_IOS || !UNITY_STANDALONE_WIN
+                switch (backend)
                 {
                     case SoundBackendOption.BassSimple:
                     case SoundBackendOption.Unity:
                         break;
                     default:
-                        MajDebug.LogDebug("Android: Fallback to BassSimple");
-                        MajInstances.Settings.Audio.Backend = SoundBackendOption.BassSimple;
+
+#if UNITY_STANDALONE || UNITY_IOS || UNITY_ANDROID
                         backend = SoundBackendOption.BassSimple;
+#else
+                        backend = SoundBackendOption.Unity;
+#endif
+                        MajInstances.Settings.Audio.Backend = backend;
+                        MajDebug.LogDebug($"Fallback to {backend}");
                         break;
                 }
 #endif
                 switch (backend)
                 {
-#if !UNITY_ANDROID
+#if UNITY_STANDALONE_WIN
                     case SoundBackendOption.Asio:
                         {
                             MajDebug.LogInfo("Bass Init: " + Bass.Init(Bass.NoSoundDevice));
@@ -181,7 +182,7 @@ namespace MajdataPlay.IO
                                 }
                             }
                             MajDebug.LogInfo($"[BassAsio] Channel count: {asioInfo.Outputs}");
-                            GenerateMixingMatrix(asioInfo.Outputs, mainChannel);
+                            GenerateMixingMatrix(asioInfo.Outputs);
 
                             BassAsio.Start();
                         }
@@ -223,28 +224,31 @@ namespace MajdataPlay.IO
                             Bass.ChannelSetAttribute(BassGlobalMixer, ChannelAttribute.Buffer, 0);
                             Bass.ChannelSetAttribute(BassGlobalMixer, (ChannelAttribute)86017, 8);
                             MajDebug.LogInfo($"[BassWasapi] Channel count: {wasapiInfo.Channels}");
-                            GenerateMixingMatrix(wasapiInfo.Channels, mainChannel);
+                            GenerateMixingMatrix(wasapiInfo.Channels);
                             BassWasapi.Start();
                         }
                         break;
 #endif
                     case SoundBackendOption.BassSimple:
                         {
-#if UNITY_ANDROID
-                            var androidOptions = MajInstances.Settings.Audio.Android;
-                            androidOptions.UpdatePeriodMs = androidOptions.UpdatePeriodMs.Clamp(5, 100);
-                            androidOptions.BufferLengthMs = androidOptions.BufferLengthMs.Clamp(androidOptions.UpdatePeriodMs + 1, 5000);
-                            androidOptions.DeviceUpdatePeriodMs = androidOptions.DeviceUpdatePeriodMs.Clamp(1, int.MaxValue);
-                            androidOptions.DeviceBufferLengthMs = androidOptions.DeviceBufferLengthMs.Clamp(androidOptions.DeviceUpdatePeriodMs * 2, int.MaxValue);
-                            var @return = Bass.Configure(Configuration.AndroidAAudio, androidOptions.EnableAAudio);
+#if UNITY_ANDROID || UNITY_IOS
+                            var mobileOptions = MajInstances.Settings.Audio.Mobile;
+                            mobileOptions.UpdatePeriodMs = mobileOptions.UpdatePeriodMs.Clamp(5, 100);
+                            mobileOptions.BufferLengthMs = mobileOptions.BufferLengthMs.Clamp(mobileOptions.UpdatePeriodMs + 1, 5000);
+                            mobileOptions.DeviceUpdatePeriodMs = mobileOptions.DeviceUpdatePeriodMs.Clamp(1, int.MaxValue);
+                            mobileOptions.DeviceBufferLengthMs = mobileOptions.DeviceBufferLengthMs.Clamp(mobileOptions.DeviceUpdatePeriodMs * 2, int.MaxValue);
+                            var @return = default(bool);
+#if UNITY_ANDROID // Android Only (AAudio Config)
+                            @return = Bass.Configure(Configuration.AndroidAAudio, mobileOptions.EnableAAudio);
                             MajDebug.LogInfo($"[Bass] Set AndroidAAudio: {@return}");
-                            @return = Bass.Configure(Configuration.UpdatePeriod, androidOptions.UpdatePeriodMs);
+#endif
+                            @return = Bass.Configure(Configuration.UpdatePeriod, mobileOptions.UpdatePeriodMs);
                             MajDebug.LogInfo($"[Bass] Set UpdatePeriod: {@return}");
-                            @return = Bass.Configure(Configuration.PlaybackBufferLength, androidOptions.BufferLengthMs);
+                            @return = Bass.Configure(Configuration.PlaybackBufferLength, mobileOptions.BufferLengthMs);
                             MajDebug.LogInfo($"[Bass] Set PlaybackBufferLength: {@return}");
-                            @return = Bass.Configure(Configuration.DevicePeriod, androidOptions.DeviceUpdatePeriodMs);
+                            @return = Bass.Configure(Configuration.DevicePeriod, mobileOptions.DeviceUpdatePeriodMs);
                             MajDebug.LogInfo($"[Bass] Set DevicePeriod: {@return}");
-                            @return = Bass.Configure(Configuration.DeviceBufferLength, androidOptions.DeviceBufferLengthMs);
+                            @return = Bass.Configure(Configuration.DeviceBufferLength, mobileOptions.DeviceBufferLengthMs);
                             MajDebug.LogInfo($"[Bass] Set DeviceBufferLength: {@return}");
 #endif
                             MajDebug.LogInfo("Bass Init: " + Bass.Init());
@@ -254,15 +258,11 @@ namespace MajdataPlay.IO
                             MajDebug.LogInfo($"[Bass] Current device buffer length: {Bass.GetConfig(Configuration.DeviceBufferLength)}");
                             MajDebug.LogInfo($"[Bass] Current device period: {Bass.GetConfig(Configuration.DevicePeriod)}");
                             MajDebug.LogInfo($"[Bass] Channel count: {Bass.Info.SpeakerCount}");
-#if !UNITY_ANDROID
-                            GenerateMixingMatrix(Bass.Info.SpeakerCount, mainChannel);
-#else
-                            GenerateMixingMatrix(Bass.Info.SpeakerCount, "Front");
-#endif
+                            GenerateMixingMatrix(Bass.Info.SpeakerCount);
                         }
                         break;
                 }
-                if(isBass)
+                if (isBass)
                 {
                     unsafe
                     {
@@ -278,19 +278,23 @@ namespace MajdataPlay.IO
                 InitSFXSample(VoiceFileNames, VoiceFilePath);
 
                 if (backend == SoundBackendOption.Wasapi || backend == SoundBackendOption.Asio || backend == SoundBackendOption.BassSimple)
+                {
                     MajDebug.LogInfo(Bass.LastError);
+                }
 
                 if (PlayDebug)
                 {
                     InputManager.BindAnyArea(OnAnyAreaDown);
                 }
                 ReadVolumeFromSettings();
+                GameManager.OnAppFocus += OnAppFocus;
             }
-            catch(Exception e)
+            catch (Exception e)
             {
                 MajDebug.LogException(e);
             }
         }
+#if UNITY_STANDALONE_WIN
         [MonoPInvokeCallback(typeof(WasapiProcedure))]
         static int WasapiProcedure(IntPtr buffer, int length, IntPtr user)
         {
@@ -322,7 +326,8 @@ namespace MajdataPlay.IO
 
             return bytesRead;
         }
-        void InitSFXSample(string[] fileNameList,string rootPath)
+#endif
+        void InitSFXSample(string[] fileNameList, string rootPath)
         {
             foreach (var filePath in fileNameList)
             {
@@ -330,7 +335,7 @@ namespace MajdataPlay.IO
                 if (!File.Exists(path))
                 {
                     SFXSamples.Add(AudioSampleWrap.Empty);
-                    MajDebug.LogWarning(path + " dos not exists");
+                    MajDebug.LogWarning(path + " does not exists");
                     continue;
                 }
                 var sample = LoadMusic(path, false, false);
@@ -354,42 +359,74 @@ namespace MajdataPlay.IO
         void OnAnyAreaDown(object sender, InputEventArgs e)
         {
             if (e.Status != SwitchStatus.On)
+            {
                 return;
-            if(e.IsButton)
+            }
+            if (e.IsButton)
+            {
                 PlaySFX("answer.wav");
+            }
             else
+            {
                 PlaySFX("touch.wav");
+            }
         }
 
         private void OnDestroy()
         {
-            if(MajInstances.Settings.Audio.Backend == SoundBackendOption.Wasapi
-                || MajInstances.Settings.Audio.Backend == SoundBackendOption.Asio||
+            GameManager.OnAppFocus -= OnAppFocus;
+            if (MajInstances.Settings.Audio.Backend == SoundBackendOption.Wasapi
+                || MajInstances.Settings.Audio.Backend == SoundBackendOption.Asio ||
                 MajInstances.Settings.Audio.Backend == SoundBackendOption.BassSimple)
             {
                 foreach (var sample in SFXSamples)
                 {
-                    if(sample is not null)
+                    if (sample is not null)
                         sample.Dispose();
                 }
 
                 Bass.StreamFree(BassGlobalMixer);
+#if UNITY_STANDALONE_WIN
                 BassAsio.Stop();
                 BassAsio.Free();
                 BassWasapi.Stop();
                 BassWasapi.Free();
+#endif
                 Bass.Stop();
                 Bass.Free();
             }
         }
 
+        void OnAppFocus(object? sender, bool isFocus)
+        {
+#if UNITY_ANDROID || UNITY_IOS
+            if(BassGlobalMixer == -114514)
+            {
+                return;
+            }
+            if (isFocus)
+            {
+                MajDebug.LogDebug("Application regained focus, attempting to restore mixer volume");
+                Bass.ChannelSetAttribute(BassGlobalMixer, ChannelAttribute.Volume, 1f);
+                MajDebug.LogDebug($"[Bass] {Bass.LastError}");
+            }
+            else
+            {
+                MajDebug.LogDebug("Application lost focus, attempting to mute the mixer");
+                Bass.ChannelSetAttribute(BassGlobalMixer, ChannelAttribute.Volume, 0f);
+                MajDebug.LogDebug($"[Bass] {Bass.LastError}");
+            }
+#endif
+        }
         public void ReadVolumeFromSettings()
         {
             var volume = MajInstances.Settings.Audio.Volume;
-            foreach(var sample in SFXSamples)
+            foreach (var sample in SFXSamples)
             {
-                if(sample is null || sample.IsEmpty) 
+                if (sample is null || sample.IsEmpty)
+                {
                     continue;
+                }
                 var vol = sample.SampleType switch
                 {
                     SFXSampleType.Answer => volume.Answer,
@@ -521,7 +558,7 @@ namespace MajdataPlay.IO
             MajDebug.LogInfo("Channel created");
             return sample;
         }
-        public AudioSampleWrap? PlaySFX(string name, bool isLoop = false)
+        public AudioSampleWrap PlaySFX(string name, bool isLoop = false)
         {
             var psp = SFXSamples.FirstOrDefault(o => o.Name == name);
             if (psp is not null)
@@ -531,7 +568,9 @@ namespace MajdataPlay.IO
                     foreach (var voice in SFXSamples.FindAll(o => o.SampleType == SFXSampleType.Voice))
                     {
                         if (voice is not null)
+                        {
                             voice.Stop();
+                        }
                     }
                 }
                 psp.PlayOneShot();
@@ -540,8 +579,8 @@ namespace MajdataPlay.IO
             }
             else
             {
-                MajDebug.LogError("No such SFX");
-                return null;
+                MajDebug.LogError($"No such SFX\nName: {name}");
+                return AudioSampleWrap.Empty;
             }
         }
 
@@ -562,18 +601,24 @@ namespace MajdataPlay.IO
         {
             var psp = SFXSamples.FirstOrDefault(o => o.Name == name);
             if (psp is not null)
+            {
                 psp.Stop();
+            }
             else
-                MajDebug.LogError("No such SFX");
+            {
+                MajDebug.LogError($"No such SFX\nName: {name}");
+            }
         }
         public void OpenAsioPannel()
         {
+#if UNITY_STANDALONE_WIN
             if(MajInstances.Settings.Audio.Backend == SoundBackendOption.Asio)
             {
                 BassAsio.ControlPanel();
             }
+#endif
         }
-        static void GenerateMixingMatrix(int chCount, string main)
+        static void GenerateMixingMatrix(int chCount)
         {
             //        var matrix = new float[8, 2]
             //        {
@@ -591,189 +636,157 @@ namespace MajdataPlay.IO
             // 4 channels      left - front, right - front, left - rear / side, right - rear / side.
             // 6 channels(5.1) left - front, right - front, center, LFE, left - rear / side, right - rear / side.
             // 8 channels(7.1) left - front, right - front, center, LFE, left - rear / side, right - rear / side, left - rear center, right - rear center.
-            
+
             // LFE = left
             // Center = right
 
             float[,] matrix;
 
             var isForceMono = MajInstances.Settings.Audio.ForceMono;
-            switch (chCount)
+#if UNITY_ANDROID || UNITY_IOS
+            var volumeSettings = new
             {
-                case 2: // 2.0
-                    matrix = new float[2,2]
-                    {
-                        { 0f, 0f },
-                        { 0f, 0f }
-                    };
-                    break;
-                case 3: // 3.0
-                    matrix = new float[3, 2]
-                    {
-                        { 0f, 0f },
-                        { 0f, 0f },
-                        { 0f, 0f },
-                    };
-                    break;
-                case 4: // 4.0
-                    matrix = new float[4, 2]
-                    {
-                        { 0f, 0f },
-                        { 0f, 0f },
-                        { 0f, 0f },
-                        { 0f, 0f },
-                    };
-                    break;
-                case 6: // 5.1
-                    matrix = new float[5, 2]
-                    {
-                        { 0f, 0f },
-                        { 0f, 0f },
-                        { 0f, 0f },
-                        { 0f, 0f },
-                        { 0f, 0f },
-                    };
-                    break;
-                case 8: // 7.1
-                    matrix = new float[8, 2]
-                    {
-                        { 0f, 0f },
-                        { 0f, 0f },
-                        { 0f, 0f },
-                        { 0f, 0f },
-                        { 0f, 0f },
-                        { 0f, 0f },
-                        { 0f, 0f },
-                        { 0f, 0f },
-                    };
-                    break;
-                default:
-                    throw new ArgumentOutOfRangeException(nameof(chCount));
+                FrontVolume = 1f,
+                CenterAndLFEVolume = 1f,
+                SideVolume = 1f,
+                RearVolume = 1f
+            };
+#else
+            var volumeSettings = MajInstances.Settings.Audio.Channel;
+#endif
+            if (isForceMono)
+            {
+                switch (chCount)
+                {
+                    case 1:// Mono
+                        matrix = new float[1, 2]
+                        {
+                            { 0.5f, 0.5f }
+                        };
+                        break;
+                    case 2: // 2.0
+                        matrix = new float[2, 2]
+                        {
+                            { 0.5f, 0.5f },
+                            { 0.5f, 0.5f }
+                        };
+                        break;
+                    case 3: // 3.0
+                        matrix = new float[3, 2]
+                        {
+                            { 0.5f, 0.5f },
+                            { 0.5f, 0.5f },
+                            { 0.5f, 0.5f },
+                        };
+                        break;
+                    case 4: // 4.0
+                        matrix = new float[4, 2]
+                        {
+                            { 0.5f, 0.5f },
+                            { 0.5f, 0.5f },
+                            { 0.5f, 0.5f },
+                            { 0.5f, 0.5f },
+                        };
+                        break;
+                    case 6: // 5.1
+                        matrix = new float[6, 2]
+                        {
+                            { 0.5f, 0.5f },
+                            { 0.5f, 0.5f },
+                            { 0.5f, 0.5f },
+                            { 0.5f, 0.5f },
+                            { 0.5f, 0.5f },
+                            { 0.5f, 0.5f },
+                        };
+                        break;
+                    case 8: // 7.1
+                        matrix = new float[8, 2]
+                        {
+                            { 0.5f, 0.5f },
+                            { 0.5f, 0.5f },
+                            { 0.5f, 0.5f },
+                            { 0.5f, 0.5f },
+                            { 0.5f, 0.5f },
+                            { 0.5f, 0.5f },
+                            { 0.5f, 0.5f },
+                            { 0.5f, 0.5f },
+                        };
+                        break;
+                    default:
+                        matrix = new float[1, 2]
+                        {
+                            { 0.5f, 0.5f }
+                        };
+                        break;
+                }
+            }
+            else
+            {
+                switch (chCount)
+                {
+                    case 1:// Mono
+                        matrix = new float[1, 2]
+                        {
+                            { 0.5f, 0.5f }
+                        };
+                        break;
+                    case 2: // 2.0
+                        matrix = new float[2, 2]
+                        {
+                            { volumeSettings.FrontVolume, 0f },
+                            { 0f, volumeSettings.FrontVolume }
+                        };
+                        break;
+                    case 3: // 3.0
+                        matrix = new float[3, 2]
+                        {
+                            { volumeSettings.FrontVolume, 0f },
+                            { volumeSettings.CenterAndLFEVolume/2f, volumeSettings.CenterAndLFEVolume/2f },
+                            { 0f, volumeSettings.FrontVolume },
+                        };
+                        break;
+                    case 4: // 4.0
+                        matrix = new float[4, 2]
+                        {
+                            { volumeSettings.FrontVolume, 0f },
+                            { 0f, volumeSettings.FrontVolume },
+                            { volumeSettings.RearVolume, 0f },
+                            { 0f, volumeSettings.RearVolume },
+                        };
+                        break;
+                    case 6: // 5.1
+                        matrix = new float[6, 2]
+                        {
+                            { volumeSettings.FrontVolume, 0f },
+                            { 0f, volumeSettings.FrontVolume },
+                            { volumeSettings.CenterAndLFEVolume, 0f },
+                            { 0f, volumeSettings.CenterAndLFEVolume },
+                            { volumeSettings.SideVolume, 0f },
+                            { 0f, volumeSettings.SideVolume }
+                        };
+                        break;
+                    case 8: // 7.1
+                        matrix = new float[8, 2]
+                        {
+                            { volumeSettings.FrontVolume, 0f },
+                            { 0f, volumeSettings.FrontVolume },
+                            { volumeSettings.CenterAndLFEVolume, 0f },
+                            { 0f, volumeSettings.CenterAndLFEVolume },
+                            { volumeSettings.SideVolume, 0f },
+                            { 0f, volumeSettings.SideVolume },
+                            { volumeSettings.RearVolume, 0f },
+                            { 0f, volumeSettings.RearVolume },
+                        };
+                        break;
+                    default:
+                        matrix = new float[1, 2]
+                        {
+                            { 0.5f, 0.5f }
+                        };
+                        break;
+                }
             }
 
-            switch(main)
-            {
-                case "Rear":
-                    if(chCount < 4)
-                    {
-                        goto default;
-                    }
-                    if(chCount == 4)
-                    {
-                        if(isForceMono)
-                        {
-                            matrix[2, 0] = .5f;
-                            matrix[2, 1] = .5f;
-                            matrix[3, 0] = .5f;
-                            matrix[3, 1] = .5f;
-                        }
-                        else
-                        {
-                            matrix[2, 0] = 1f;
-                            matrix[3, 1] = 1f;
-                        } 
-                    }
-                    else if(chCount == 6)
-                    {
-                        if (isForceMono)
-                        {
-                            matrix[4, 0] = .5f;
-                            matrix[4, 1] = .5f;
-                            matrix[5, 0] = .5f;
-                            matrix[5, 1] = .5f;
-                        }
-                        else
-                        {
-                            matrix[4, 0] = 1f;
-                            matrix[5, 1] = 1f;
-                        }
-                    }
-                    else if(chCount == 8)
-                    {
-                        if (isForceMono)
-                        {
-                            matrix[4, 0] = .5f;
-                            matrix[4, 1] = .5f;
-                            matrix[5, 0] = .5f;
-                            matrix[5, 1] = .5f;
-                        }
-                        else
-                        {
-                            matrix[4, 0] = 1f;
-                            matrix[5, 1] = 1f;
-                        }
-                    }
-                    else
-                    {
-                        MajDebug.LogWarning($"Not support channel count \"{chCount}\", fallback to \"Front\"");
-                        goto default;
-                    }
-                    break;
-                case "Side":
-                    if (chCount < 8)
-                    {
-                        goto default;
-                    }
-                    if (isForceMono)
-                    {
-                        matrix[6, 0] = .5f;
-                        matrix[6, 1] = .5f;
-                        matrix[7, 0] = .5f;
-                        matrix[7, 1] = .5f;
-                    }
-                    else
-                    {
-                        matrix[6, 0] = 1f;
-                        matrix[7, 1] = 1f;
-                    }
-                    break;
-                case "CenterAndLFE":
-                    if (chCount is not (3 or 6 or 8))
-                    {
-                        goto default;
-                    }
-                    if (chCount == 3)
-                    {
-                        matrix[2, 0] = 0.5f;
-                        matrix[2, 1] = 0.5f;
-                    }
-                    else if (chCount is (6 or 8))
-                    {
-                        if (isForceMono)
-                        {
-                            matrix[3, 0] = .5f;
-                            matrix[3, 1] = .5f;
-                            matrix[2, 0] = .5f;
-                            matrix[2, 1] = .5f;
-                        }
-                        else
-                        {
-                            matrix[3, 0] = 1f;
-                            matrix[2, 1] = 1f;
-                        }
-                    }
-                    else
-                    {
-                        MajDebug.LogWarning($"Not support channel count \"{chCount}\", fallback to \"Front\"");
-                        goto default;
-                    }
-                    break;
-                case "Front":
-                default:
-                    if (isForceMono)
-                    {
-                        matrix[0, 0] = .5f;
-                        matrix[0, 1] = .5f;
-                        matrix[1, 0] = .5f;
-                        matrix[1, 1] = .5f;
-                    }
-                    else
-                    {
-                        matrix[0, 0] = 1f;
-                        matrix[1, 1] = 1f;
-                    }
-                    break;
-            }
 
             MixingMatrix = matrix;
         }

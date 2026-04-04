@@ -39,6 +39,7 @@ namespace MajdataPlay.IO
             get
             {
                 ThrowIfDisposed();
+                ThrowIfCanSeekNotSupported();
                 return _audioSource!.time;
             }
             set
@@ -167,23 +168,35 @@ namespace MajdataPlay.IO
         }
         public static UnityAudioSample Create(string filePath, GameObject gameObject)
         {
-            using (UnityWebRequest www = UnityWebRequestMultimedia.GetAudioClip(filePath, AudioType.UNKNOWN))
+            filePath = filePath.Replace('\\', '/');
+            string encoded = System.Uri.EscapeUriString(filePath);
+            encoded = encoded.Replace("+", "%2B");
+            using (UnityWebRequest www = UnityWebRequestMultimedia.GetAudioClip(encoded, AudioType.UNKNOWN))
             {
                 www.SetRequestHeader("User-Agent", MajEnv.HTTP_USER_AGENT);
                 www.SendWebRequest();
                 while (!www.isDone) ;
                 var myClip = DownloadHandlerAudioClip.GetContent(www);
-                return new UnityAudioSample(myClip, gameObject);
+                return new UnityAudioSample(myClip, gameObject)
+                {
+                    CanSeek = filePath.StartsWith("file://"),
+                };
             }
         }
         public static async UniTask<UnityAudioSample> CreateAsync(string filePath, GameObject gameObject)
         {
-            using (UnityWebRequest www = UnityWebRequestMultimedia.GetAudioClip(filePath, AudioType.UNKNOWN))
+            filePath = filePath.Replace('\\', '/');
+            string encoded = System.Uri.EscapeUriString(filePath);
+            encoded = encoded.Replace("+", "%2B");
+            using (UnityWebRequest www = UnityWebRequestMultimedia.GetAudioClip(encoded, AudioType.UNKNOWN))
             {
                 www.SetRequestHeader("User-Agent", MajEnv.HTTP_USER_AGENT);
                 await www.SendWebRequest();
                 var myClip = DownloadHandlerAudioClip.GetContent(www);
-                return new UnityAudioSample(myClip, gameObject);
+                return new UnityAudioSample(myClip, gameObject)
+                {
+                    CanSeek = filePath.StartsWith("file://")
+                };
             }
         }
     }

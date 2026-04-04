@@ -1,47 +1,56 @@
-﻿using MajdataPlay.Buffers;
+using MajdataPlay.Buffers;
 using MajdataPlay.Extensions;
+using MajdataPlay.IO;
+using MajdataPlay.Numerics;
 using MajdataPlay.Scenes.Game.Buffers;
 using MajdataPlay.Scenes.Game.Notes.Controllers;
 using MajdataPlay.Scenes.Game.Notes.Touch;
 using MajdataPlay.Scenes.Game.Utils;
-using MajdataPlay.IO;
-using MajdataPlay.Numerics;
+using MajdataPlay.Settings;
 using MajdataPlay.Utils;
 using System;
 using System.Runtime.CompilerServices;
 using System.Threading.Tasks;
-using MajdataPlay.Settings;
 using UnityEngine;
+using UnityEngine.Profiling;
 using UnityEngine.UI;
 #nullable enable
 namespace MajdataPlay.Scenes.Game.Notes.Behaviours
 {
-    using Unsafe = System.Runtime.CompilerServices.Unsafe;
     internal sealed class TouchHoldDrop : NoteLongDrop, INoteQueueMember<TouchQueueInfo>, IRendererContainer, IPoolableNote<TouchHoldPoolingInfo, TouchQueueInfo>, IMajComponent
     {
-        public TouchGroup? GroupInfo { get; set; } = null;
-        public TouchQueueInfo QueueInfo { get; set; } = TouchQueueInfo.Default;
+        public TouchGroup? GroupInfo { get; private set; } = null;
+        public TouchHoldGroup? BodyGroupInfo { get; private set; } = null;
+        public TouchQueueInfo QueueInfo { get; private set; } = TouchQueueInfo.Default;
         public RendererStatus RendererState
         {
             get => _rendererState;
             set
             {
-                if (State < NoteStatus.Initialized)
+                if (State < NoteStatus.Inited)
+                {
                     return;
+                }
 
                 switch (value)
                 {
                     case RendererStatus.Off:
-                        foreach (var renderer in _fanRenderers)
-                            renderer.forceRenderingOff = true;
-                        _borderRenderer.forceRenderingOff = true;
-                        _borderMask.forceRenderingOff = true;
+                        for (var i = 0; i < _fanRenderers.Length; i++)
+                        {
+                            var renderer = _fanRenderers[i];
+                            renderer.enabled = false;
+                        }
+                        _borderRenderer.enabled = false;
+                        _borderMask.enabled = false;
                         break;
                     case RendererStatus.On:
-                        foreach (var renderer in _fanRenderers)
-                            renderer.forceRenderingOff = false;
-                        _borderRenderer.forceRenderingOff = false;
-                        _borderMask.forceRenderingOff = false;
+                        for (var i = 0; i < _fanRenderers.Length; i++)
+                        {
+                            var renderer = _fanRenderers[i];
+                            renderer.enabled = true;
+                        }
+                        _borderRenderer.enabled = true;
+                        _borderMask.enabled = true;
                         break;
                     default:
                         return;
@@ -77,7 +86,7 @@ namespace MajdataPlay.Scenes.Game.Notes.Behaviours
         // -1 => Head judged
         // 0  => Released
         // 1  => Pressed
-        int _lastHoldState = -2;
+        int _lastHoldState = HOLD_STATE_HEAD_MISS_OR_NOT_JUDGED;
         float _releaseTime = 0;
         Range<float> _bodyCheckRange;
         //readonly float _touchPanelOffset = MajEnv.UserSetting?.Judge.TouchPanelOffset ?? 0;
@@ -126,10 +135,15 @@ namespace MajdataPlay.Scenes.Game.Notes.Behaviours
             SetPointActive(false);
             Active = false;
 
-            //if (!IsAutoplay)
-            //    _noteManager.OnGameIOUpdate += GameIOListener;
+            for (var i = 0; i < _fanRenderers.Length; i++)
+            {
+                var renderer = _fanRenderers[i];
+                renderer.enabled = false;
+            }
+            _borderRenderer.enabled = false;
+            _borderMask.enabled = false;
+            _borderMask.alphaCutoff = 0;
 
-            RendererState = RendererStatus.Off;
             Transform.localScale *= USERSETTING_TOUCH_SCALE;
         }
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
@@ -176,8 +190,7 @@ namespace MajdataPlay.Scenes.Game.Notes.Behaviours
                             IsEX = IsEX,
                             Diff = _judgeDiff
                         });
-                        _effectManager.PlayHoldEffect(_sensorPos, _judgeResult);
-                        _lastHoldState = -1;
+                        _lastHoldState = HOLD_STATE_HEAD_JUDGED_AND_NOT_FEEDBACK;
                     }
                     break;
                 case AutoplayModeOption.DJAuto_TouchPanel_First:
@@ -208,9 +221,9 @@ namespace MajdataPlay.Scenes.Game.Notes.Behaviours
             }
             _noteManager.SimulateSensorClick(_sensorPos);
         }
-        public void Initialize(TouchHoldPoolingInfo poolingInfo)
+        public void Init(TouchHoldPoolingInfo poolingInfo)
         {
-            if (State >= NoteStatus.Initialized && State < NoteStatus.End)
+            if (State >= NoteStatus.Inited && State < NoteStatus.End)
             {
                 return;
             }
@@ -226,11 +239,13 @@ namespace MajdataPlay.Scenes.Game.Notes.Behaviours
             IsEX = poolingInfo.IsEX;
             QueueInfo = poolingInfo.QueueInfo;
             GroupInfo = poolingInfo.GroupInfo;
+            BodyGroupInfo = poolingInfo.TouchHoldGroupInfo;
             _isJudged = false;
-            _lastHoldState = -2;
+            _lastHoldState = HOLD_STATE_HEAD_MISS_OR_NOT_JUDGED;
             Length = poolingInfo.LastFor;
             isFirework = poolingInfo.IsFirework;
             _sensorPos = poolingInfo.SensorPos;
+            _judgeResult = JudgeGrade.Miss;
             if (_sensorPos < SensorArea.B1 && _sensorPos >= SensorArea.A1)
             {
                 _buttonPos = _sensorPos.ToButtonZone();
@@ -279,7 +294,7 @@ namespace MajdataPlay.Scenes.Game.Notes.Behaviours
             _borderMask.frontSortingOrder = SortOrder - _borderSortOrder;
             _borderMask.backSortingOrder = SortOrder - _borderSortOrder - 1;
 
-            State = NoteStatus.Initialized;
+            State = NoteStatus.Inited;
         }
         void End()
         {
@@ -290,6 +305,8 @@ namespace MajdataPlay.Scenes.Game.Notes.Behaviours
 
             State = NoteStatus.End;
             _multTouchHandler.Unregister(_sensorPos);
+            BodyGroupInfo?.UnregisterTrigger(InstanceID);
+            BodyGroupInfo?.Exit();
             _judgeResult = HoldEndJudge(_judgeResult, TOUCH_HOLD_HEAD_IGNORE_LENGTH_SEC + TOUCH_HOLD_TAIL_IGNORE_LENGTH_SEC);
             ConvertJudgeGrade(ref _judgeResult);
             var result = new NoteJudgeResult()
@@ -320,7 +337,7 @@ namespace MajdataPlay.Scenes.Game.Notes.Behaviours
                 IsEX = false,
                 Diff = _judgeDiff
             });
-            _lastHoldState = -2;
+            _lastHoldState = HOLD_STATE_HEAD_MISS_OR_NOT_JUDGED;
             _audioEffMana.StopTouchHoldSound();
             _effectManager.PlayTouchHoldEffect(_sensorPos, result);
             _effectManager.ResetHoldEffect(_sensorPos);
@@ -393,76 +410,83 @@ namespace MajdataPlay.Scenes.Game.Notes.Behaviours
             ConvertJudgeGrade(ref result);
             _judgeResult = result;
             _isJudged = true;
-            _lastHoldState = -1;
+            BodyGroupInfo?.RegisterTrigger(InstanceID);
+            _lastHoldState = HOLD_STATE_HEAD_JUDGED_AND_NOT_FEEDBACK;
         }
         [OnPreUpdate]
         void OnPreUpdate()
         {
-            TooLateCheck();
-            Check();
-            BodyCheck();
-            ForceEndCheck();
-            Autoplay();
+            using (UnityProfiler.Create("TouchHoldDrop.OnPreUpdate"))
+            {
+                TooLateCheck();
+                Check();
+                BodyCheck();
+                ForceEndCheck();
+                Autoplay();
+            }
         }
         [OnUpdate]
         void OnUpdate()
         {
-            var timing = GetTimeSpanToArriveTiming();
-
-            switch (State)
+            using (UnityProfiler.Create("TouchHoldDrop.OnUpdate"))
             {
-                case NoteStatus.Initialized:
-                    if (-timing < wholeDuration)
-                    {
-                        _multTouchHandler.Register(_sensorPos, IsEach, IsBreak);
-                        SetPointActive(true);
-                        SetFanActive(true);
-                        RendererState = RendererStatus.On;
-                        State = NoteStatus.Scaling;
-                        goto case NoteStatus.Scaling;
-                    }
-                    return;
-                case NoteStatus.Scaling:
-                    {
-                        var newColor = Color.white;
-                        if (-timing < moveDuration)
+                var timing = GetTimeSpanToArriveTiming();
+
+                switch (State)
+                {
+                    case NoteStatus.Inited:
+                        if (-timing < wholeDuration)
                         {
-                            SetFansColor(Color.white);
-                            State = NoteStatus.Running;
-                            goto case NoteStatus.Running;
+                            _multTouchHandler.Register(_sensorPos, IsEach, IsBreak);
+                            SetPointActive(true);
+                            SetFanActive(true);
+                            RendererState = RendererStatus.On;
+                            State = NoteStatus.Scaling;
+                            goto case NoteStatus.Scaling;
                         }
-                        var alpha = ((wholeDuration + timing) / displayDuration).Clamp(0, 1);
-                        newColor.a = alpha;
-                        SetFansColor(newColor);
-                    }
-                    return;
-                case NoteStatus.Running:
-                    {
-                        var pow = -Mathf.Exp(8 * (timing * 0.43f / moveDuration) - 0.85f) + 0.42f;
-                        var distance = Mathf.Clamp(pow, 0f, 0.4f);
-                        if (float.IsNaN(distance))
-                            distance = 0f;
-                        if (timing >= 0)
+                        return;
+                    case NoteStatus.Scaling:
                         {
-                            var _pow = -Mathf.Exp(-0.85f) + 0.42f;
-                            var _distance = Mathf.Clamp(_pow, 0f, 0.4f);
-                            SetFansPosition(_distance);
-                            SetBorderActive(true);
-                            _borderMask.enabled = true;
-                            State = NoteStatus.Arrived;
-                            goto case NoteStatus.Arrived;
+                            var newColor = Color.white;
+                            if (-timing < moveDuration)
+                            {
+                                SetFansColor(Color.white);
+                                State = NoteStatus.Running;
+                                goto case NoteStatus.Running;
+                            }
+                            var alpha = ((wholeDuration + timing) / displayDuration).Clamp(0, 1);
+                            newColor.a = alpha;
+                            SetFansColor(newColor);
                         }
-                        else
-                            SetFansPosition(distance);
-                    }
-                    return;
-                case NoteStatus.Arrived:
-                    {
-                        var value = 0.91f * (1 - (Length - timing) / Length);
-                        var alpha = value.Clamp(0, 1f);
-                        _borderMask.alphaCutoff = alpha;
-                    }
-                    return;
+                        return;
+                    case NoteStatus.Running:
+                        {
+                            var pow = -Mathf.Exp(8 * (timing * 0.43f / moveDuration) - 0.85f) + 0.42f;
+                            var distance = Mathf.Clamp(pow, 0f, 0.4f);
+                            if (float.IsNaN(distance))
+                                distance = 0f;
+                            if (timing >= 0)
+                            {
+                                var _pow = -Mathf.Exp(-0.85f) + 0.42f;
+                                var _distance = Mathf.Clamp(_pow, 0f, 0.4f);
+                                SetFansPosition(_distance);
+                                SetBorderActive(true);
+                                _borderMask.enabled = true;
+                                State = NoteStatus.Arrived;
+                                goto case NoteStatus.Arrived;
+                            }
+                            else
+                                SetFansPosition(distance);
+                        }
+                        return;
+                    case NoteStatus.Arrived:
+                        {
+                            var value = 0.91f * (1 - (Length - timing) / Length);
+                            var alpha = value.Clamp(0, 1f);
+                            _borderMask.alphaCutoff = alpha;
+                        }
+                        return;
+                }
             }
         }
         void RegisterGrade()
@@ -494,7 +518,9 @@ namespace MajdataPlay.Scenes.Game.Notes.Behaviours
                         _isJudged = true;
                         _judgeResult = (JudgeGrade)GroupInfo.JudgeResult;
                         _judgeDiff = GroupInfo.JudgeDiff;
+                        _lastHoldState = HOLD_STATE_HEAD_JUDGED_AND_NOT_FEEDBACK;
                         _noteManager.NextTouch(QueueInfo);
+                        BodyGroupInfo?.RegisterTrigger(InstanceID);
                     }
                 }
             }
@@ -503,14 +529,14 @@ namespace MajdataPlay.Scenes.Game.Notes.Behaviours
                 _judgeResult = JudgeGrade.Miss;
                 _isJudged = true;
                 _judgeDiff = TOUCH_JUDGE_GOOD_AREA_MSEC;
-                _lastHoldState = -2;
+                _lastHoldState = HOLD_STATE_HEAD_MISS_OR_NOT_JUDGED;
                 _releaseTime = 114514;
                 _noteManager.NextTouch(QueueInfo);
             }
         }
         void Check()
         {
-            if (IsEnded || !IsInitialized || _isJudged || AutoplayMode == AutoplayModeOption.Enable)
+            if (IsEnded || !IsInited || _isJudged || AutoplayMode == AutoplayModeOption.Enable)
             {
                 return;
             }
@@ -519,7 +545,7 @@ namespace MajdataPlay.Scenes.Game.Notes.Behaviours
                 return;
             }
 
-#if UNITY_ANDROID
+#if UNITY_ANDROID || UNITY_IOS
             if (_noteManager.IsSensorClickedInThisFrame(_sensorPos) && _noteManager.TryUseSensorClickEvent(_sensorPos))
             {
                 Judge(ThisFrameSec - USERSETTING_TOUCHPANEL_OFFSET_SEC);
@@ -553,26 +579,44 @@ namespace MajdataPlay.Scenes.Game.Notes.Behaviours
         }
         void BodyCheck()
         {
-            if (!_isJudged || IsEnded)
+            if (!IsInited || IsEnded)
             {
                 return;
             }
-
-            if (_lastHoldState is -1 or 1)
+            if (_lastHoldState is HOLD_STATE_HEAD_JUDGED or HOLD_STATE_PRESSED)
             {
                 _audioEffMana.PlayTouchHoldSound();
             }
 
             if (!_bodyCheckRange.InRange(ThisFrameSec) || !NoteController.IsStart)
             {
+                if (_lastHoldState == HOLD_STATE_HEAD_JUDGED_AND_NOT_FEEDBACK && GetRemainingTime() < Length)
+                {
+                    _effectManager.PlayHoldEffect(_sensorPos, _judgeResult);
+                    _lastHoldState = HOLD_STATE_HEAD_JUDGED;
+                }
                 return;
             }
             var on = _noteManager.CheckSensorStatusInThisFrame(_sensorPos, SwitchStatus.On);
+
+            if(BodyGroupInfo is not null)
+            {
+                if (on)
+                {
+                    BodyGroupInfo.RegisterTrigger(InstanceID);
+                }
+                else
+                {
+                    BodyGroupInfo.UnregisterTrigger(InstanceID);
+                }
+                on |= BodyGroupInfo.Percent > 0.5f;
+            }
+
             if (on || IsAutoplay)
             {
                 PlayHoldEffect();
                 _releaseTime = 0;
-                _lastHoldState = 1;
+                _lastHoldState = HOLD_STATE_PRESSED;
             }
             else
             {
@@ -583,7 +627,7 @@ namespace MajdataPlay.Scenes.Game.Notes.Behaviours
                 }
                 _playerReleaseTimeSec += MajTimeline.DeltaTime;
                 StopHoldEffect();
-                _lastHoldState = 0;
+                _lastHoldState = HOLD_STATE_RELEASED;
             }
         }
         void ForceEndCheck()
@@ -667,11 +711,11 @@ namespace MajdataPlay.Scenes.Game.Notes.Behaviours
         {
             //var r = MajInstances.AudioManager.GetSFX("touch_Hold_riser.wav");
             //MajDebug.Log($"IsPlaying:{r.IsPlaying}\nCurrent second: {r.CurrentSec}s");
-            if (_lastHoldState != 1)
+            if (_lastHoldState != HOLD_STATE_PRESSED)
             {
                 _effectManager.PlayHoldEffect(_sensorPos, _judgeResult);
                 _borderRenderer.sprite = board_On;
-                if (_lastHoldState < 0)
+                if (_lastHoldState < HOLD_STATE_RELEASED)
                 {
                     SetFansMaterial(DefaultMaterial);
                 }
@@ -679,11 +723,11 @@ namespace MajdataPlay.Scenes.Game.Notes.Behaviours
         }
         void StopHoldEffect()
         {
-            if (_lastHoldState != 0)
+            if (_lastHoldState != HOLD_STATE_RELEASED)
             {
                 _effectManager.ResetHoldEffect(_sensorPos);
                 _borderRenderer.sprite = board_Off;
-                if (_lastHoldState < 0)
+                if (_lastHoldState < HOLD_STATE_RELEASED)
                 {
                     SetFansMaterial(DefaultMaterial);
                 }

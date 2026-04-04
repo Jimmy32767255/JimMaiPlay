@@ -333,24 +333,27 @@ namespace MajdataPlay.Scenes.Game
 
         internal void OnLateUpdate()
         {
-            Profiler.BeginSample("ObjectCounter.OnLateUpdate");
-            Profiler.BeginSample("ObjectCounter.UpdateAccRate");
-            UpdateAccRate();
-            Profiler.EndSample();
-            Profiler.BeginSample("GamePlayManager.UpdateOutput");
-            UpdateOutput();
-            Profiler.EndSample();
-            if(_xxlbDanceRequest.IsRequested)
+            using (UnityProfiler.Create("ObjectCounter.OnLateUpdate"))
             {
-                _xxlbController.Dance(_xxlbDanceRequest.Grade);
-                _xxlbDanceRequest = new();
+                using (UnityProfiler.Create("ObjectCounter.UpdateAccRate"))
+                {
+                    UpdateAccRate();
+                }
+                using (UnityProfiler.Create("ObjectCounter.UpdateOutput"))
+                {
+                    UpdateOutput();
+                }
+                if (_xxlbDanceRequest.IsRequested)
+                {
+                    _xxlbController.Dance(_xxlbDanceRequest.Grade);
+                    _xxlbDanceRequest = new();
+                }
+                if (_isOutlinePlayRequested)
+                {
+                    _outline.Play();
+                    _isOutlinePlayRequested = false;
+                }
             }
-            if(_isOutlinePlayRequested)
-            {
-                _outline.Play();
-                _isOutlinePlayRequested = false;
-            }
-            Profiler.EndSample();
         }
         internal void Clear()
         {
@@ -503,7 +506,7 @@ namespace MajdataPlay.Scenes.Game
             Span<decimal> newAccRate = stackalloc decimal[5];
 
             newAccRate[0] = CurrentNoteScoreClassic / (decimal)TotalNoteBaseScore;
-            newAccRate[1] = (CurrentNoteBaseScore - LostNoteBaseScore + CurrentNoteExtraScoreClassic) / (decimal)TotalNoteBaseScore;
+            newAccRate[1] = (TotalNoteBaseScore - LostNoteBaseScore + CurrentNoteExtraScoreClassic) / (decimal)TotalNoteBaseScore;
             newAccRate[2] = ((TotalNoteBaseScore - LostNoteBaseScore) / (decimal)TotalNoteBaseScore) + ((TotalNoteExtraScore - LostNoteExtraScore) / ((decimal)(TotalNoteExtraScore is 0 ? 1 : TotalNoteExtraScore) * 100));
             newAccRate[3] = ((TotalNoteBaseScore - LostNoteBaseScore) / (decimal)TotalNoteBaseScore) + ((CurrentNoteExtraScore) / ((decimal)(TotalNoteExtraScore is 0 ? 1 : TotalNoteExtraScore) * 100));
             newAccRate[4] = ((CurrentNoteBaseScore) / (decimal)TotalNoteBaseScore) + ((CurrentNoteExtraScore) / ((decimal)(TotalNoteExtraScore is 0 ? 1 : TotalNoteExtraScore) * 100));
@@ -950,7 +953,7 @@ namespace MajdataPlay.Scenes.Game
         /// </summary>
         void UpdateTopAcc()
         {
-            var isClassic = MajInstances.GameManager.Setting.Judge.Mode == JudgeModeOption.Classic;
+            var isClassic = MajInstances.GameManager.Settings.Judge.Mode == JudgeModeOption.Classic;
             var format = isClassic ? CLASSIC_ACC_RATE_FORMAT : DX_ACC_RATE_FORMAT;
             double value;
             if(isClassic)

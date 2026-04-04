@@ -11,6 +11,7 @@ using System.Text;
 using System.Threading.Tasks;
 using Unity.IL2CPP.CompilerServices;
 using UnityEngine;
+using static MajdataPlay.PlayerLoopCallbackAttribute;
 #nullable enable
 namespace MajdataPlay.Scenes.Game.Buffers
 {
@@ -111,10 +112,10 @@ namespace MajdataPlay.Scenes.Game.Buffers
                 {
                     continue;
                 }
-                if (!MajCache<MethodInfo, PlayerLoopFunctionAttribute[]>.TryGetValue(method, out var attributes))
+                if (!MajCache<MethodInfo, PlayerLoopCallbackAttribute[]>.TryGetValue(method, out var attributes))
                 {
-                    attributes = (PlayerLoopFunctionAttribute[])Attribute.GetCustomAttributes(method, typeof(PlayerLoopFunctionAttribute));
-                    attributes = MajCache<MethodInfo, PlayerLoopFunctionAttribute[]>.GetOrAdd(method, attributes);
+                    attributes = (PlayerLoopCallbackAttribute[])Attribute.GetCustomAttributes(method, typeof(PlayerLoopCallbackAttribute));
+                    attributes = MajCache<MethodInfo, PlayerLoopCallbackAttribute[]>.GetOrAdd(method, attributes);
                 }
                 if (attributes.Length == 0)
                 {
@@ -189,7 +190,14 @@ namespace MajdataPlay.Scenes.Game.Buffers
                 for (var i = 0; i < funcCount; i++)
                 {
                     var func = onPreUpdateFunctions[i];
-                    func();
+                    try
+                    {
+                        func();
+                    }
+                    catch (Exception e)
+                    {
+                        MajDebug.LogException(e);
+                    }
                 }
             }
         }
@@ -208,7 +216,14 @@ namespace MajdataPlay.Scenes.Game.Buffers
                 for (var i = 0; i < funcCount; i++)
                 {
                     var func = onUpdateFunctions[i];
-                    func();
+                    try
+                    {
+                        func();
+                    }
+                    catch (Exception e)
+                    {
+                        MajDebug.LogException(e);
+                    }
                 }
             }
         }
@@ -227,7 +242,14 @@ namespace MajdataPlay.Scenes.Game.Buffers
                 for (var i = 0; i < funcCount; i++)
                 {
                     var func = onLateUpdateFunctions[i];
-                    func();
+                    try
+                    {
+                        func();
+                    }
+                    catch (Exception e)
+                    {
+                        MajDebug.LogException(e);
+                    }
                 }
             }
         }
@@ -246,7 +268,14 @@ namespace MajdataPlay.Scenes.Game.Buffers
                 for (var i = 0; i < funcCount; i++)
                 {
                     var func = onFixedUpdateFunctions[i];
-                    func();
+                    try
+                    {
+                        func();
+                    }
+                    catch (Exception e)
+                    {
+                        MajDebug.LogException(e);
+                    }
                 }
             }
         }

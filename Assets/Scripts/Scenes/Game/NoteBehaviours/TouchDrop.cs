@@ -1,16 +1,17 @@
 ﻿using MajdataPlay.Buffers;
 using MajdataPlay.Extensions;
+using MajdataPlay.IO;
+using MajdataPlay.Numerics;
 using MajdataPlay.Scenes.Game.Buffers;
 using MajdataPlay.Scenes.Game.Notes.Controllers;
 using MajdataPlay.Scenes.Game.Notes.Touch;
 using MajdataPlay.Scenes.Game.Utils;
-using MajdataPlay.IO;
-using MajdataPlay.Numerics;
+using MajdataPlay.Settings;
 using MajdataPlay.Utils;
 using System;
 using System.Runtime.CompilerServices;
-using MajdataPlay.Settings;
 using UnityEngine;
+using UnityEngine.Profiling;
 #nullable enable
 namespace MajdataPlay.Scenes.Game.Notes.Behaviours
 {
@@ -24,18 +25,26 @@ namespace MajdataPlay.Scenes.Game.Notes.Behaviours
             get => _rendererState;
             set
             {
-                if (State < NoteStatus.Initialized)
+                if (State < NoteStatus.Inited)
+                {
                     return;
+                }
 
                 switch (value)
                 {
                     case RendererStatus.Off:
-                        foreach (var renderer in _fanRenderers)
-                            renderer.forceRenderingOff = true;
+                        for (var i = 0; i < _fanRenderers.Length; i++)
+                        {
+                            var renderer = _fanRenderers[i];
+                            renderer.enabled = false;
+                        }                                
                         break;
                     case RendererStatus.On:
-                        foreach (var renderer in _fanRenderers)
-                            renderer.forceRenderingOff = false;
+                        for (var i = 0; i < _fanRenderers.Length; i++)
+                        {
+                            var renderer = _fanRenderers[i];
+                            renderer.enabled = true;
+                        }
                         break;
                     default:
                         return;
@@ -118,17 +127,21 @@ namespace MajdataPlay.Scenes.Game.Notes.Behaviours
             SetJustBorderActive(false);
             SetPointActive(false);
             Active = false;
-            //_noteChecker = new(Check);
 
-            //if(!IsAutoplay)
-            //    _noteManager.OnGameIOUpdate += GameIOListener;
-            RendererState = RendererStatus.Off;
+            for (var i = 0; i < _fanRenderers.Length; i++)
+            {
+                var renderer = _fanRenderers[i];
+                renderer.enabled = false;
+            }
+
             Transform.localScale *= USERSETTING_TOUCH_SCALE;
         }
-        public void Initialize(TouchPoolingInfo poolingInfo)
+        public void Init(TouchPoolingInfo poolingInfo)
         {
-            if (State >= NoteStatus.Initialized && State < NoteStatus.End)
+            if (State >= NoteStatus.Inited && State < NoteStatus.End)
+            {
                 return;
+            }
 
             StartPos = poolingInfo.StartPos;
             Timing = poolingInfo.Timing - TOUCH_DISPLAY_OFFSET_SEC;
@@ -179,7 +192,7 @@ namespace MajdataPlay.Scenes.Game.Notes.Behaviours
             SetJustBorderActive(false);
             SetPointActive(false);
 
-            State = NoteStatus.Initialized;
+            State = NoteStatus.Inited;
         }
         void End()
         {
@@ -269,7 +282,7 @@ namespace MajdataPlay.Scenes.Game.Notes.Behaviours
         }
         void Check()
         {
-            if (IsEnded || !IsInitialized)
+            if (IsEnded || !IsInited)
             {
                 return;
             }
@@ -277,7 +290,7 @@ namespace MajdataPlay.Scenes.Game.Notes.Behaviours
             {
                 return;
             }
-#if UNITY_ANDROID
+#if UNITY_ANDROID || UNITY_IOS
             if (_noteManager.IsSensorClickedInThisFrame(_sensorPos) && _noteManager.TryUseSensorClickEvent(_sensorPos))
             {
                 Judge(ThisFrameSec - USERSETTING_TOUCHPANEL_OFFSET_SEC);
@@ -354,66 +367,72 @@ namespace MajdataPlay.Scenes.Game.Notes.Behaviours
         [OnPreUpdate]
         void OnPreUpdate()
         {
-            TooLateCheck();
-            Check();
-            Autoplay();
+            using (UnityProfiler.Create("TouchDrop.OnPreUpdate"))
+            {
+                TooLateCheck();
+                Check();
+                Autoplay();
+            }
         }
         [OnUpdate]
         void OnUpdate()
         {
-            var timing = GetTimeSpanToArriveTiming();
-
-            switch (State)
+            using (UnityProfiler.Create("TouchDrop.OnUpdate"))
             {
-                case NoteStatus.Initialized:
-                    if (-timing < _wholeDuration)
-                    {
-                        _multTouchHandler.Register(_sensorPos, IsEach, IsBreak);
-                        RendererState = RendererStatus.On;
-                        //_pointObject.SetActive(true);
-                        SetPointActive(true);
-                        SetFanActive(true);
-                        State = NoteStatus.Scaling;
-                        goto case NoteStatus.Scaling;
-                    }
-                    return;
-                case NoteStatus.Scaling:
-                    {
-                        var newColor = Color.white;
-                        if (-timing < _moveDuration)
-                        {
-                            SetFansColor(Color.white);
-                            State = NoteStatus.Running;
-                            goto case NoteStatus.Running;
-                        }
-                        var alpha = ((_wholeDuration + timing) / _displayDuration).Clamp(0, 1);
-                        newColor.a = alpha;
-                        SetFansColor(newColor);
-                    }
-                    return;
-                case NoteStatus.Running:
-                    {
-                        var pow = -Mathf.Exp(8 * (timing * 0.43f / _moveDuration) - 0.85f) + 0.42f;
-                        var distance = Mathf.Clamp(pow, 0f, 0.4f);
-                        if (float.IsNaN(distance))
-                            distance = 0f;
+                var timing = GetTimeSpanToArriveTiming();
 
-                        if (timing >= 0)
+                switch (State)
+                {
+                    case NoteStatus.Inited:
+                        if (-timing < _wholeDuration)
                         {
-                            var _pow = -Mathf.Exp(-0.85f) + 0.42f;
-                            var _distance = Mathf.Clamp(_pow, 0f, 0.4f);
-                            SetFansPosition(_distance);
-                            SetJustBorderActive(true);
-                            State = NoteStatus.Arrived;
+                            _multTouchHandler.Register(_sensorPos, IsEach, IsBreak);
+                            RendererState = RendererStatus.On;
+                            //_pointObject.SetActive(true);
+                            SetPointActive(true);
+                            SetFanActive(true);
+                            State = NoteStatus.Scaling;
+                            goto case NoteStatus.Scaling;
                         }
-                        else
+                        return;
+                    case NoteStatus.Scaling:
                         {
-                            SetFansPosition(distance);
+                            var newColor = Color.white;
+                            if (-timing < _moveDuration)
+                            {
+                                SetFansColor(Color.white);
+                                State = NoteStatus.Running;
+                                goto case NoteStatus.Running;
+                            }
+                            var alpha = ((_wholeDuration + timing) / _displayDuration).Clamp(0, 1);
+                            newColor.a = alpha;
+                            SetFansColor(newColor);
                         }
-                    }
-                    return;
-                case NoteStatus.Arrived:
-                    return;
+                        return;
+                    case NoteStatus.Running:
+                        {
+                            var pow = -Mathf.Exp(8 * (timing * 0.43f / _moveDuration) - 0.85f) + 0.42f;
+                            var distance = Mathf.Clamp(pow, 0f, 0.4f);
+                            if (float.IsNaN(distance))
+                                distance = 0f;
+
+                            if (timing >= 0)
+                            {
+                                var _pow = -Mathf.Exp(-0.85f) + 0.42f;
+                                var _distance = Mathf.Clamp(_pow, 0f, 0.4f);
+                                SetFansPosition(_distance);
+                                SetJustBorderActive(true);
+                                State = NoteStatus.Arrived;
+                            }
+                            else
+                            {
+                                SetFansPosition(distance);
+                            }
+                        }
+                        return;
+                    case NoteStatus.Arrived:
+                        return;
+                }
             }
         }
         protected override void Judge(float currentSec)
@@ -539,13 +558,21 @@ namespace MajdataPlay.Scenes.Game.Notes.Behaviours
         protected override void PlayJudgeSFX(in NoteJudgeResult judgeResult)
         {
             if (judgeResult.IsMissOrTooFast)
+            {
                 return;
+            }
             if (judgeResult.IsBreak)
+            {
                 _audioEffMana.PlayTapSound(judgeResult);
+            }
             else
+            {
                 _audioEffMana.PlayTouchSound();
+            }
             if (_isFirework)
+            {
                 _audioEffMana.PlayHanabiSound();
+            }
         }
         RendererStatus _rendererState = RendererStatus.Off;
     }

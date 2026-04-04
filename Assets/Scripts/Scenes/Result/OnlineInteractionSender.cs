@@ -1,7 +1,6 @@
 using Cysharp.Threading.Tasks;
 using MajdataPlay.IO;
 using MajdataPlay.Net;
-using MajdataPlay.Settings;
 using MajdataPlay.Utils;
 using NeoSmart.AsyncLock;
 using System;
@@ -52,6 +51,7 @@ namespace MajdataPlay.Scenes.Result
             var serverInfo = onlineDetail.ServerInfo;
             if (serverInfo is null || serverInfo.RuntimeConfig.AuthMethod == NetAuthMethodOption.None)
             {
+                infotext.text = "";
                 thumb.gameObject.SetActive(false);
                 _isLocalOrGuest = true;
                 return;
@@ -67,11 +67,18 @@ namespace MajdataPlay.Scenes.Result
             {
                 return;
             }
-            if(!_isAlreadyThumbUp && (InputManager.IsSensorClickedInThisFrame(SensorArea.E3) || InputManager.IsSensorClickedInThisFrame(SensorArea.B3)))
+            if(!_isAlreadyThumbUp && 
+                (InputManager.IsSensorClickedInThisFrame(SensorArea.E3) || 
+                InputManager.IsSensorClickedInThisFrame(SensorArea.B3))
+                )
             {
                 _ = SendLikeAsync();
             }
-            if (!_isAlreadyThumbUp && (InputManager.IsSensorClickedInThisFrame(SensorArea.E4) || InputManager.IsSensorClickedInThisFrame(SensorArea.D4) || InputManager.IsSensorClickedInThisFrame(SensorArea.A3)))
+            if (!_isScorePosted && !MajInstances.GameManager.Settings.Mod.IsAnyModActive() && 
+                (InputManager.IsSensorClickedInThisFrame(SensorArea.E4) || 
+                InputManager.IsSensorClickedInThisFrame(SensorArea.D4) || 
+                InputManager.IsSensorClickedInThisFrame(SensorArea.A3))
+                )
             {
                 _ = SendScoreAsync();
             }
