@@ -1,6 +1,8 @@
 using Cysharp.Threading.Tasks;
+using MajdataPlay.Drawing;
 using MajdataPlay.IO;
 using MajdataPlay.Net;
+using MajdataPlay.Settings;
 using MajdataPlay.Utils;
 using MajSimai;
 using NeoSmart.AsyncLock;
@@ -55,6 +57,8 @@ namespace MajdataPlay
         SimaiFile? _maidata = null;
         SimaiMetadata _simaiMetadata;
 
+        ChartSetting _chartSettings;
+
         readonly bool _isEmptyCover = false;
         readonly AsyncLock _previewAudioTrackLock = new();
         readonly AsyncLock _audioTrackLock = new();
@@ -69,10 +73,30 @@ namespace MajdataPlay
         public SongDetail(string chartFolder, SimaiMetadata metadata)
         {
             var files = new DirectoryInfo(chartFolder).GetFiles();
+            var videoBGFilename = new string[3]
+            {
+                "bg",
+                "pv",
+                "mv"
+            };
 
             _maidataPath = Path.Combine(chartFolder, "maidata.txt");
-            _trackPath = files.FirstOrDefault(o => o.Name.ToLower() is "track.opus" or "track.mp3" or "track.ogg" or "track.aac").FullName;
-            _videoPath = files.FirstOrDefault(o => o.Name.ToLower() is "bg.mp4" or "pv.mp4" or "mv.mp4")?.FullName ?? string.Empty;
+            _trackPath = files.FirstOrDefault(o => o.Name.ToLower() is "track.opus" or "track.mp3" or "track.ogg" or "track.aac" or "track.wav").FullName;
+            _videoPath = files.FirstOrDefault(o =>
+            {
+                var thisFilename = o.Name.ToLower();
+                foreach (var filename in videoBGFilename)
+                {
+                    foreach(var ext in MajEnv.SUPPORTED_VIDEO_FORMAT)
+                    {
+                        if(thisFilename == filename + ext)
+                        {
+                            return true;
+                        }
+                    }
+                }
+                return false;
+            })?.FullName ?? string.Empty;
             _coverPath = files.FirstOrDefault(o => o.Name.ToLower() is "bg.png" or "bg.jpg")?.FullName ?? string.Empty;
             _maidata = null;
 
@@ -81,6 +105,7 @@ namespace MajdataPlay
                 _isEmptyCover = true;
             }
             _simaiMetadata = metadata;
+            _chartSettings = ChartSettingStorage.GetSetting(_simaiMetadata.Hash);
             Title = metadata.Title;
             Artist = metadata.Artist;
             Timestamp = files.FirstOrDefault(x => x.Name is "maidata.txt")?.LastWriteTime ?? DateTime.UnixEpoch;
@@ -109,6 +134,10 @@ namespace MajdataPlay
         }
         public ValueTask<string> GetVideoPathAsync(INetProgress? progress = null, CancellationToken token = default)
         {
+            if (_chartSettings.DisableVideoBG)
+            {
+                return UniTask.FromResult(string.Empty);
+            }
             ThrowIfDisposed();
             return UniTask.FromResult(_videoPath);
         }

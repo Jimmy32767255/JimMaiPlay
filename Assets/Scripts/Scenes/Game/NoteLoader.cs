@@ -5,7 +5,6 @@ using UnityEngine;
 using MajSimai;
 using Cysharp.Threading.Tasks;
 using System.Threading.Tasks;
-using MajdataPlay.Utils;
 using System.Runtime.CompilerServices;
 using MajdataPlay.Scenes.Game.Utils;
 using MajdataPlay.Collections;
@@ -207,8 +206,8 @@ namespace MajdataPlay.Scenes.Game
             { SensorArea.C, new SensorArea[]{ SensorArea.B1, SensorArea.B2, SensorArea.B3, SensorArea.B4, SensorArea.B5, SensorArea.B6, SensorArea.B7, SensorArea.B8} },
         };
 
-        readonly IReadOnlyDictionary<int, int> _buttonRingMappingTable;
-        readonly IReadOnlyDictionary<SensorArea, SensorArea> _touchPanelMappingTable;
+        IReadOnlyDictionary<int, int> _buttonRingMappingTable;
+        IReadOnlyDictionary<SensorArea, SensorArea> _touchPanelMappingTable;
         NoteLoader()
         {
             (_buttonRingMappingTable, _touchPanelMappingTable) = NoteCreateHelper.GenerateMappingTable();
@@ -282,13 +281,23 @@ namespace MajdataPlay.Scenes.Game
             {
 
                 var lastNoteTime = maiChart.NoteTimings[^1].Timing;
-
+                var randomMappingTableLifeTime = new Range<double>(double.MinValue,double.MinValue, ContainsType.Closed);
+                var isSRandomEnabled = MajEnv.Settings.Game.Random == RandomModeOption.S_RANDOM;
                 for (var i = 0; i < maiChart.NoteTimings.Length; i++)
                 {
                     var timing = maiChart.NoteTimings[i];
                     RentedList<NotePoolingInfo?> eachNotes = new();
-                    RentedList<ITouchGroupInfoProvider> members = new();
+                    RentedList<ITouchGroupInfoProvider> touchGroupMembers = new();
+                    RentedList<ITouchHoldGroupInfoProvider> touchHoldGroupMembers = new();
                     var foldedNotes = NoteCreateHelper.NoteFolding(timing.Notes);
+                    if (isSRandomEnabled)
+                    {
+                        if (!randomMappingTableLifeTime.InRange(timing.Timing))
+                        {
+                            (_buttonRingMappingTable, _touchPanelMappingTable) = NoteCreateHelper.GenerateMappingTable();
+                            randomMappingTableLifeTime = new Range<double>(timing.Timing, timing.Timing, ContainsType.RightOpen);
+                        }
+                    }
                     foreach (var note in foldedNotes)
                     {
                         token.ThrowIfCancellationRequested();
@@ -308,13 +317,30 @@ namespace MajdataPlay.Scenes.Game
                                         var obj = CreateHold(note, timing);
                                         _poolManager.AddHold(obj);
                                         eachNotes.Add(obj);
+
+                                        if (isSRandomEnabled)
+                                        {
+                                            var endTiming = timing.Timing + note.HoldTime;
+                                            if(!randomMappingTableLifeTime.InRange(endTiming))
+                                            {
+                                                randomMappingTableLifeTime = new Range<double>(randomMappingTableLifeTime.Start, endTiming, ContainsType.RightOpen);
+                                            }
+                                        }
                                     }
                                     break;
                                 case SimaiNoteType.TouchHold:
-                                    _poolManager.AddTouchHold(CreateTouchHold(note, timing, members));
+                                    _poolManager.AddTouchHold(CreateTouchHold(note, timing, touchGroupMembers, touchHoldGroupMembers));
+                                    if (isSRandomEnabled)
+                                    {
+                                        var endTiming = timing.Timing + note.HoldTime;
+                                        if (!randomMappingTableLifeTime.InRange(endTiming))
+                                        {
+                                            randomMappingTableLifeTime = new Range<double>(randomMappingTableLifeTime.Start, endTiming, ContainsType.RightOpen);
+                                        }
+                                    }
                                     break;
                                 case SimaiNoteType.Touch:
-                                    _poolManager.AddTouch(CreateTouch(note, timing, members));
+                                    _poolManager.AddTouch(CreateTouch(note, timing, touchGroupMembers));
                                     break;
                                 case SimaiNoteType.Slide:
                                     var foldedSlide = note as FoldedSimaiNote;
@@ -358,9 +384,13 @@ namespace MajdataPlay.Scenes.Game
                         }
                     }
                     token.ThrowIfCancellationRequested();
-                    if (members.Count != 0)
+                    if (touchGroupMembers.Count != 0)
                     {
-                        touchTasks.Add(AllocTouchGroup(members));
+                        touchTasks.Add(AllocTouchGroup(touchGroupMembers));
+                    }
+                    if (touchHoldGroupMembers.Count != 0)
+                    {
+                        touchTasks.Add(AllocTouchHoldGroup(touchHoldGroupMembers));
                     }
                     var eachNoteCount = 0;
                     for (var x = 0; x < eachNotes.Count; x++)
@@ -399,7 +429,7 @@ namespace MajdataPlay.Scenes.Game
             }
             token.ThrowIfCancellationRequested();
             _slideUpdater.AddSlideQueueInfos(_slideQueueInfos);
-            _poolManager.Initialize();
+            _poolManager.Init();
         }
         EachLinePoolingInfo? CreateEachLine(SimaiTimingPoint timing, NotePoolingInfo noteA, NotePoolingInfo noteB)
         {
@@ -409,7 +439,9 @@ namespace MajdataPlay.Scenes.Game
                 var endPos = noteB.StartPos;
                 endPos = endPos - startPos;
                 if (endPos == 0)
+                {
                     return null;
+                }
                 var time = (float)timing.Timing;
                 var speed = NoteSpeed * timing.HSpeed;
                 var scaleRate = MajInstances.Settings.Debug.NoteAppearRate;
@@ -463,18 +495,22 @@ namespace MajdataPlay.Scenes.Game
                 var sortOrder = _noteSortOrder;
                 var isEach = timing.Notes.Length > 1;
                 if (appearTiming < -5f && _gpManager is not null)
+                {
                     _gpManager.FirstNoteAppearTiming = Mathf.Min(_gpManager.FirstNoteAppearTiming, appearTiming);
+                }
                 if (isEach)
                 {
                     var noteCount = timing.Notes.Length;
                     var noHeadSlideCount = timing.Notes.FindAll(x => x.Type == SimaiNoteType.Slide && x.IsSlideNoHead).Length;
                     if (noteCount - noHeadSlideCount == 1)
+                    {
                         isEach = false;
+                    }
                 }
-                _isHasTap[startPos - 1] = true;
                 _noteSortOrder -= NOTE_LAYER_COUNT[note.Type];
                 startPos = NoteCreateHelper.Rotation(startPos, ChartRotation);
                 NoteCreateHelper.SetNewPositionIfRequested(ref startPos, _buttonRingMappingTable);
+                _isHasTap[startPos - 1] = true;
                 return new()
                 {
                     StartPos = startPos,
@@ -518,19 +554,23 @@ namespace MajdataPlay.Scenes.Game
                 var sortOrder = _noteSortOrder;
                 var isEach = timing.Notes.Length > 1;
                 if (appearTiming < -5f && _gpManager is not null)
+                {
                     _gpManager.FirstNoteAppearTiming = Mathf.Min(_gpManager.FirstNoteAppearTiming, appearTiming);
+                }
                 if (isEach)
                 {
                     var noteCount = timing.Notes.Length;
                     var noHeadSlideCount = timing.Notes.FindAll(x => x.Type == SimaiNoteType.Slide && x.IsSlideNoHead).Length;
                     if (noteCount - noHeadSlideCount == 1)
+                    {
                         isEach = false;
+                    }
                 }
-                _isHasHold[startPos - 1] = true;
-                _isHasTap[startPos - 1] = true;
                 _noteSortOrder -= NOTE_LAYER_COUNT[note.Type];
                 startPos = NoteCreateHelper.Rotation(startPos, ChartRotation);
                 NoteCreateHelper.SetNewPositionIfRequested(ref startPos, _buttonRingMappingTable);
+                _isHasHold[startPos - 1] = true;
+                _isHasTap[startPos - 1] = true;
                 return new()
                 {
                     StartPos = startPos,
@@ -578,7 +618,9 @@ namespace MajdataPlay.Scenes.Game
                 appearTiming = Math.Min(appearTiming, slideFadeInTiming);
 
                 if (appearTiming < -5f && _gpManager is not null)
+                {
                     _gpManager.FirstNoteAppearTiming = Mathf.Min(_gpManager.FirstNoteAppearTiming, appearTiming);
+                }
                 _noteSortOrder -= NOTE_LAYER_COUNT[note.Type];
                 _isHasTap[startPos - 1] = true;
                 if (isEach)
@@ -665,7 +707,9 @@ namespace MajdataPlay.Scenes.Game
                 var moveDuration = 3.209385682f * Mathf.Pow(speed, -0.9549621752f);
                 var appearTiming = Math.Min(noteTiming - moveDuration, noteTiming - 0.15f);
                 if (appearTiming < -5f && _gpManager is not null)
+                {
                     _gpManager.FirstNoteAppearTiming = Mathf.Min(_gpManager.FirstNoteAppearTiming, appearTiming);
+                }
                 _isHasTouch[(int)sensorPos] = true;
                 _touchSortOrder -= NOTE_LAYER_COUNT[note.Type];
                 if (isEach)
@@ -709,7 +753,8 @@ namespace MajdataPlay.Scenes.Game
         }
         TouchHoldPoolingInfo CreateTouchHold(in SimaiNote note,
                                              in SimaiTimingPoint timing,
-                                             in IList<ITouchGroupInfoProvider> members)
+                                             in IList<ITouchGroupInfoProvider> touchGroupMembers,
+                                             in IList<ITouchHoldGroupInfoProvider> touchHoldGroupMembers)
         {
             try
             {
@@ -733,11 +778,12 @@ namespace MajdataPlay.Scenes.Game
                 var appearTiming = Math.Min(noteTiming - moveDuration, noteTiming - 0.15f);
                 var noteSortOrder = _touchSortOrder;
                 if (appearTiming < -5f && _gpManager is not null)
+                {
                     _gpManager.FirstNoteAppearTiming = Mathf.Min(_gpManager.FirstNoteAppearTiming, appearTiming);
+                }
 
-                _isHasTouchHold[(int)sensorPos] = true;
                 _touchSortOrder -= NOTE_LAYER_COUNT[note.Type];
-                sensorPos = NoteCreateHelper.Rotation(sensorPos, ChartRotation);
+                _isHasTouchHold[(int)sensorPos] = true;
                 var poolingInfo = new TouchHoldPoolingInfo()
                 {
                     SensorPos = sensorPos,
@@ -756,7 +802,8 @@ namespace MajdataPlay.Scenes.Game
                 };
                 if (isEach)
                 {
-                    members.Add(poolingInfo);
+                    touchGroupMembers.Add(poolingInfo);
+                    touchHoldGroupMembers.Add(poolingInfo);
                 }
                 return poolingInfo;
             }
@@ -829,6 +876,67 @@ namespace MajdataPlay.Scenes.Game
                 {
                     token.ThrowIfCancellationRequested();
                     member.GroupInfo = touchGroups.Find(x => x.Members.Any(y => y == member));
+                }
+            });
+        }
+        Task AllocTouchHoldGroup(IList<ITouchHoldGroupInfoProvider> members, CancellationToken token = default)
+        {
+            return Task.Run(() =>
+            {
+                var sensorTypes = members.GroupBy(x => x.SensorPos)
+                                         .Select(x => x.Key)
+                                         .ToList();
+                using var sensorGroups = new RentedList<RentedList<SensorArea>>();
+
+                while (sensorTypes.Count > 0)
+                {
+                    var sensorType = sensorTypes[0];
+                    var groupMembers = new RentedList<SensorArea>();
+                    groupMembers.Add(sensorType);
+
+                    for (var i = 0; i < groupMembers.Count; i++)
+                    {
+                        token.ThrowIfCancellationRequested();
+                        var currentArea = groupMembers[i];
+                        var nearbyArea = TOUCH_GROUPS[currentArea];
+                        for (var j = 0; j < sensorTypes.Count; j++)
+                        {
+                            token.ThrowIfCancellationRequested();
+                            var area = sensorTypes[j];
+                            if (groupMembers.Contains(area))
+                            {
+                                continue;
+                            }
+                            else if (nearbyArea.Contains(area))
+                            {
+                                groupMembers.Add(area);
+                            }
+                        }
+                    }
+
+                    foreach (var area in groupMembers)
+                    {
+                        token.ThrowIfCancellationRequested();
+                        sensorTypes.Remove(area);
+                    }
+                    token.ThrowIfCancellationRequested();
+                    sensorGroups.Add(groupMembers);
+                }
+                using var touchHoldGroups = new RentedList<TouchHoldGroup>();
+                var memberMapping = members.GroupBy(x => x.SensorPos).ToDictionary(x => x.Key);
+                token.ThrowIfCancellationRequested();
+                foreach (var group in sensorGroups)
+                {
+                    token.ThrowIfCancellationRequested();
+                    touchHoldGroups.Add(new TouchHoldGroup()
+                    {
+                        Members = group.SelectMany(x => memberMapping[x]).ToArray()
+                    });
+                }
+                foreach (var member in members)
+                {
+                    token.ThrowIfCancellationRequested();
+                    member.TouchHoldGroupInfo = touchHoldGroups.Find(x => x.Members.Any(y => y == member));
                 }
             });
         }
@@ -1029,7 +1137,7 @@ namespace MajdataPlay.Scenes.Game
                         }
                         //AddSlideToQueue(timing, result.SlideInstance);
                         UpdateStarRotateSpeed(result, (float)preprocessSubSlides[i].SlideTime, 20);
-                        sliObj.Initialize();
+                        sliObj.Init();
                     }
                     else
                     {
@@ -1086,7 +1194,7 @@ namespace MajdataPlay.Scenes.Game
                 }
                 foreach (var subSlide in subSlides)
                 {
-                    subSlide.Initialize();
+                    subSlide.Init();
                 }
                 if (slideResult is not null)
                 {
@@ -1835,10 +1943,8 @@ namespace MajdataPlay.Scenes.Game
                     case RandomModeOption.Disabled:
                         return;
                     case RandomModeOption.RANDOM:
-                        originPos = RandomTap(originPos, mappingTable);
-                        break;
                     case RandomModeOption.S_RANDOM:
-                        originPos = RandomTap();
+                        originPos = RandomTap(originPos, mappingTable);
                         break;
                 }
             }
@@ -1850,10 +1956,8 @@ namespace MajdataPlay.Scenes.Game
                     case RandomModeOption.Disabled:
                         return;
                     case RandomModeOption.RANDOM:
-                        originPos = RandomTouch(originPos, mappingTable);
-                        break;
                     case RandomModeOption.S_RANDOM:
-                        originPos = RandomTouch();
+                        originPos = RandomTouch(originPos, mappingTable);
                         break;
                 }
             }
@@ -1866,10 +1970,8 @@ namespace MajdataPlay.Scenes.Game
                     case RandomModeOption.Disabled:
                         return;
                     case RandomModeOption.RANDOM:
-                        (originStartPos, originEndPos) = RandomSlide(originStartPos, originEndPos, mappingTable);
-                        break;
                     case RandomModeOption.S_RANDOM:
-                        (originStartPos, originEndPos) = RandomSlide(originStartPos, originEndPos);
+                        (originStartPos, originEndPos) = RandomSlide(originStartPos, originEndPos, mappingTable);
                         break;
                 }
             }

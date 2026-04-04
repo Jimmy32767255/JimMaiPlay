@@ -10,6 +10,7 @@ using UnityEngine;
 using UnityEngine.SceneManagement;
 using UnityEngine.Scripting;
 using UnityEngine.UI;
+using UnityEngine.Video;
 #nullable enable
 namespace MajdataPlay
 {
@@ -21,6 +22,7 @@ namespace MajdataPlay
             private set; 
         }
         public static MajScenes CurrentScene { get; private set; } = MajScenes.Init;
+        public static MajScenes LastScene { get; private set; } = MajScenes.Init;
 
         Canvas _canvas;
         Animator animator;
@@ -30,7 +32,10 @@ namespace MajdataPlay
         public Color LoadingLightColor;
 
         [SerializeField]
-        ScreenPosCanvasMover _canvasMover;
+        VideoPlayer _videoPlayer;
+        [SerializeField]
+        SpriteRenderer _mvRenderer;
+        GameObject _bgObject;
 
         readonly string[] SCENE_NAMES = Enum.GetNames(typeof(MajScenes));
 
@@ -51,10 +56,7 @@ namespace MajdataPlay
             _canvas = GetComponent<Canvas>();
             animator = GetComponent<Animator>();
             loadingText.gameObject.SetActive(false);
-        }
-        internal void RefreshPos()
-        {
-            _canvasMover.Refresh();
+            _bgObject = _videoPlayer.gameObject;
         }
         void OnUnitySceneChanged(Scene current, Scene next)
         {
@@ -63,10 +65,12 @@ namespace MajdataPlay
             MainCamera = Camera.main;
             //var currentScene = SceneManager.GetActiveScene();
             var index = Array.FindIndex(SCENE_NAMES, x => x == next.name);
+            var lastScene = CurrentScene;
             if (index != -1)
             {
                 CurrentScene = Enum.Parse<MajScenes>(SCENE_NAMES[index]);
             }
+            LastScene = lastScene;
             _canvas.worldCamera = MainCamera;
         }
 
@@ -74,7 +78,36 @@ namespace MajdataPlay
         {
             SwitchSceneInternal(sceneName,autoFadeOut).Forget();
         }
-
+        public UniTask SwitchSceneAsync(string sceneName, bool autoFadeOut = true)
+        {
+            return SwitchSceneInternal(sceneName, autoFadeOut);
+        }
+        public void PauseMV()
+        {
+            _videoPlayer.Pause();
+        }
+        public void PlayMV()
+        {
+            _videoPlayer.Play();
+        }
+        public void StopMV()
+        {
+            _videoPlayer.Stop();
+        }
+        public void HideMV()
+        {
+            PauseMV();
+            _videoPlayer.enabled = false;
+            _mvRenderer.enabled = false;
+            _bgObject.layer = MajEnv.HIDDEN_LAYER;
+        }
+        public void ShowMV()
+        {
+            _mvRenderer.enabled = true;
+            _videoPlayer.enabled = true;
+            _bgObject.layer = MajEnv.DEFAULT_LAYER;
+            PlayMV();
+        }
         public void FadeOut()
         {
             animator.SetBool("In", false);

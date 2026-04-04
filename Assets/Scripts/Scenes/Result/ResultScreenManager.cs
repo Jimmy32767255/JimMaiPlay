@@ -3,7 +3,6 @@ using TMPro;
 using UnityEngine;
 using UnityEngine.UI;
 using Cysharp.Threading.Tasks;
-using MajdataPlay.Utils;
 using MajdataPlay.Collections;
 using System.Linq;
 using System;
@@ -17,6 +16,8 @@ using MajdataPlay.Numerics;
 using MajdataPlay.Scenes.Game.Notes;
 using MajdataPlay.Settings;
 using System.Threading.Tasks;
+using MajdataPlay.Recording;
+using MajdataPlay.Net;
 
 #nullable enable
 namespace MajdataPlay.Scenes.Result
@@ -69,6 +70,10 @@ namespace MajdataPlay.Scenes.Result
         bool _isInited = false;
         bool _isExited = false;
 
+        void Awake()
+        {
+            InputManager.TouchButtonRingEdge = 4.8f;
+        }
         void Start()
         {
             rank.text = "";
@@ -179,7 +184,7 @@ namespace MajdataPlay.Scenes.Result
 
             MajInstances.AudioManager.PlaySFX("bgm_result.mp3", true);
             PlayVoice(result.Acc.DX, song,totalJudgeRecord.IsAllPerfect, totalJudgeRecord.IsFullCombo).Forget();
-            if (!MajInstances.GameManager.Setting.Mod.IsAnyModActive())
+            if (!MajInstances.GameManager.Settings.Mod.IsAnyModActive())
             {
                 var localScoreSaveTask = ScoreManager.SaveScore(result, result.Level);
                 if (song is OnlineSongDetail onlineSong && onlineSong.ServerInfo.RuntimeConfig.AuthMethod != NetAuthMethodOption.None)
@@ -336,12 +341,12 @@ namespace MajdataPlay.Scenes.Result
             var breakJudgeInfo = JudgeDetail.UnpackJudgeRecord(judgeRecord[ScoreNoteType.Break]);
             string[] nmsl = new string[]
             {
-                "音符\t\t非常完美    \t完美    \t极好    \t良好   \t错过",
-                $"点击  \t\t{tapJudgeInfo.CriticalPerfect}\t\t{tapJudgeInfo.Perfect}\t\t{tapJudgeInfo.Great}\t\t{tapJudgeInfo.Good}\t\t{tapJudgeInfo.Miss}",
-                $"长按\t\t{holdJudgeInfo.CriticalPerfect}\t\t{holdJudgeInfo.Perfect}\t\t{holdJudgeInfo.Great}\t\t{holdJudgeInfo.Good}\t\t{holdJudgeInfo.Miss}",
-                $"滑动\t\t{slideJudgeInfo.CriticalPerfect}\t\t{slideJudgeInfo.Perfect}\t\t{slideJudgeInfo.Great}\t\t{slideJudgeInfo.Good}\t\t{slideJudgeInfo.Miss}",
-                $"触摸\t\t{touchJudgeInfo.CriticalPerfect}\t\t{touchJudgeInfo.Perfect}\t\t{touchJudgeInfo.Great}\t\t{touchJudgeInfo.Good}\t\t{touchJudgeInfo.Miss}",
-                $"绝赞\t\t{breakJudgeInfo.CriticalPerfect}\t\t{breakJudgeInfo.Perfect}\t\t{breakJudgeInfo.Great}\t\t{breakJudgeInfo.Good}\t\t{breakJudgeInfo.Miss}"
+                $"<color=#FFFFFF><indent=0%>音符<indent=16.6%><color=#FFF90E>非常完美<indent=33.3%><color=#FFB30D>完美<indent=50%><color=#FFA2F1>极好<indent=66.6%><color=#00DF0E>良好<indent=83.3%><color=#C7C7C7>错过",
+                $"<color=#FFFFFF><indent=0%>点击<indent=16.6%><color=#FFF90E>{tapJudgeInfo.CriticalPerfect}<indent=33.3%><color=#FFB30D>{tapJudgeInfo.Perfect}<indent=50%><color=#FFA2F1>{tapJudgeInfo.Great}<indent=66.6%><color=#00DF0E>{tapJudgeInfo.Good}<indent=83.3%><color=#C7C7C7>{tapJudgeInfo.Miss}",
+                $"<color=#FFFFFF><indent=0%>长按<indent=16.6%><color=#FFF90E>{holdJudgeInfo.CriticalPerfect}<indent=33.3%><color=#FFB30D>{holdJudgeInfo.Perfect}<indent=50%><color=#FFA2F1>{holdJudgeInfo.Great}<indent=66.6%><color=#00DF0E>{holdJudgeInfo.Good}<indent=83.3%><color=#C7C7C7>{holdJudgeInfo.Miss}",
+                $"<color=#FFFFFF><indent=0%>滑动<indent=16.6%><color=#FFF90E>{slideJudgeInfo.CriticalPerfect}<indent=33.3%><color=#FFB30D>{slideJudgeInfo.Perfect}<indent=50%><color=#FFA2F1>{slideJudgeInfo.Great}<indent=66.6%><color=#00DF0E>{slideJudgeInfo.Good}<indent=83.3%><color=#C7C7C7>{slideJudgeInfo.Miss}",
+                $"<color=#FFFFFF><indent=0%>触摸<indent=16.6%><color=#FFF90E>{touchJudgeInfo.CriticalPerfect}<indent=33.3%><color=#FFB30D>{touchJudgeInfo.Perfect}<indent=50%><color=#FFA2F1>{touchJudgeInfo.Great}<indent=66.6%><color=#00DF0E>{touchJudgeInfo.Good}<indent=83.3%><color=#C7C7C7>{touchJudgeInfo.Miss}",
+                $"<color=#FFFFFF><indent=0%>绝赞<indent=16.6%><color=#FFF90E>{breakJudgeInfo.CriticalPerfect}<indent=33.3%><color=#FFB30D>{breakJudgeInfo.Perfect}<indent=50%><color=#FFA2F1>{breakJudgeInfo.Great}<indent=66.6%><color=#00DF0E>{breakJudgeInfo.Good}<indent=83.3%><color=#C7C7C7>{breakJudgeInfo.Miss}",
             };
             return string.Join("\n", nmsl);
         }
@@ -391,6 +396,7 @@ namespace MajdataPlay.Scenes.Result
         }
         void OnDestroy()
         {
+            InputManager.TouchButtonRingEdge = 5.4f;
             DestroyImmediate(_noteJudgeDiffGraph.texture, true);
         }
         Texture DrawNoteJudgeDiffGraph(ReadOnlyMemory<float> noteJudgeDiffs)

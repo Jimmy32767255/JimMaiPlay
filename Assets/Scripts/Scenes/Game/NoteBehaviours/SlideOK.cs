@@ -5,6 +5,7 @@ using System;
 using System.Runtime.CompilerServices;
 using Unity.IL2CPP.CompilerServices;
 using UnityEngine;
+using UnityEngine.Profiling;
 #nullable enable
 namespace MajdataPlay.Scenes.Game.Notes.Behaviours
 {
@@ -128,15 +129,19 @@ namespace MajdataPlay.Scenes.Game.Notes.Behaviours
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         void OnUpdate()
         {
-            if (_elapsedTime > 0.5f)
+            using (UnityProfiler.Create("SlideOK.OnUpdate"))
             {
-                State = NoteStatus.End;
-                _spriteRenderer.sharedMaterial = _defaultMaterial;
-                SetActiveInternal(false);
-            }
-            else
-            {
-                _elapsedTime += MajTimeline.DeltaTime;
+                if (_elapsedTime > 0.5f)
+                {
+                    State = NoteStatus.End;
+                    _spriteRenderer.sharedMaterial = _defaultMaterial;
+                    SetActiveInternal(false);
+                    GameObject.layer = MajEnv.HIDDEN_LAYER;
+                }
+                else
+                {
+                    _elapsedTime += MajTimeline.DeltaTime;
+                }
             }
         }
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
@@ -221,7 +226,9 @@ namespace MajdataPlay.Scenes.Game.Notes.Behaviours
         public override void SetActive(bool state)
         {
             if (Active == state)
+            {
                 return;
+            }
             SetActiveInternal(state);
         }
         void SetActiveInternal(bool state)
@@ -230,14 +237,12 @@ namespace MajdataPlay.Scenes.Game.Notes.Behaviours
             switch (state)
             {
                 case true:
-                    _spriteRenderer.forceRenderingOff = false;
                     _spriteRenderer.enabled = true;
                     _animator.enabled = true;
                     break;
                 case false:
-                    _spriteRenderer.forceRenderingOff = !false;
-                    _spriteRenderer.enabled = !true;
-                    _animator.enabled = !true;
+                    _spriteRenderer.enabled = false;
+                    _animator.enabled = false;
                     break;
             }
         }

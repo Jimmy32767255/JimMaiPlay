@@ -3,6 +3,7 @@ using MajdataPlay.Scenes.Game;
 using MajdataPlay.Scenes.Game.Notes;
 using MajdataPlay.IO;
 using MajdataPlay.Utils;
+using MajdataPlay.Drawing;
 using System;
 using System.Collections;
 using System.Collections.Generic;
@@ -95,7 +96,6 @@ namespace MajdataPlay.Scenes.List
             _cts = new();
             var linkedCts = CancellationTokenSource.CreateLinkedTokenSource(_listManager.CancellationToken, _cts.Token);
             ListManager.AllBackgroundTasks.Add(SetCoverAsync(detail, linkedCts.Token));
-            _chartAnalyzer.AnalyzeAndDrawGraphAsync(detail, (ChartLevel)diff, token: linkedCts.Token).Forget();
         }
         public void SetNoCover()
         {
@@ -133,7 +133,7 @@ namespace MajdataPlay.Scenes.List
             }
             else
             {
-                var isClassic = MajInstances.GameManager.Setting.Judge.Mode == JudgeModeOption.Classic;
+                var isClassic = MajInstances.GameManager.Settings.Judge.Mode == JudgeModeOption.Classic;
                 _archieveRate.text = isClassic ? $"{score.Acc.Classic:F2}%" : $"{score.Acc.DX:F4}%";
                 _archieveRate.enabled = true;
                 _APbg.SetActive(false);

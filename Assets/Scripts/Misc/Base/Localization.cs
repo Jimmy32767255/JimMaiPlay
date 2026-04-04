@@ -9,6 +9,7 @@ using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Threading;
+using UnityEngine;
 
 #nullable enable
 namespace MajdataPlay
@@ -23,10 +24,12 @@ namespace MajdataPlay
             {
                 _current = value;
                 if (OnLanguageChanged is not null)
+                {
                     OnLanguageChanged(null, value);
+                }
             }
         }
-        readonly static JsonSerializerSettings jsonReaderSettings = new()
+        readonly static JsonSerializerSettings JsonReaderSettings = new()
         {
             Formatting = Formatting.Indented,
             Converters = 
@@ -56,25 +59,32 @@ namespace MajdataPlay
 
             try
             {
-                var path = MajEnv.LangPath;
-                if (!Directory.Exists(path))
+                var files = new List<string>
                 {
-                    return;
-                }
-                var files = new DirectoryInfo(path).GetFiles()
-                                                   .Where(x => x.Extension == ".json");
+                    "Langs/en-US",
+                    "Langs/ja-JP",
+                    "Langs/zh-CN",
+                    "Langs/zh-TW",
+                };
                 List<Language> loadedLangs = new();
-                foreach (var fileInfo in files)
+                foreach (var file in files)
                 {
-                    var filePath = fileInfo.FullName;
-                    var json = File.ReadAllText(filePath);
+                    var ta = Resources.Load<TextAsset>(file);
+                    if (ta == null)
+                    {
+                        MajDebug.LogError($"Lang file not found: {file}");
+                        continue;
+                    }
+                    MajDebug.LogDebug("Lang file loaded: " + file);
+                    var json = ta.text;
                     Language? lang = null;
-                    if (Serializer.Json.TryDeserialize(json, out lang, jsonReaderSettings) && lang is not null)
+                    if (Serializer.Json.TryDeserialize(json, out lang, out var exception, JsonReaderSettings) && lang is not null)
                     {
                         loadedLangs.Add(lang);
                     }
                     else
                     {
+                        MajDebug.LogException(exception);
                         continue;
                     }
                 }
@@ -98,41 +108,46 @@ namespace MajdataPlay
         /// Set language by code and author<para>such like: "zh-CN - Majdata"</para>
         /// </summary>
         /// <param name="langInfo"></param>
-        public static void SetLang(string langInfo)
+        public static bool SetLang(string langInfo)
         {
             if (Available.IsEmpty())
-                return;
+            {
+                return false;
+            }
             var result = Available.Find(x => x.ToString() == langInfo);
             if (result is null)
-                return;
+            {
+                return false;
+            }
             Current = result;
+            return true;
         }
-        public static void SetLangByCode(string code)
+        public static bool SetLangByCode(string code)
         {
             if (Available.IsEmpty())
-                return;
+            {
+                return false;
+            }
             var result = Available.Find(x => x.Code == code);
             if (result is null)
-                return;
+            {
+                return false;
+            }
             Current = result;
+            return true;
         }
 
-        /// <summary>
-        /// Method <c>GetLocalizedText</c> returns the translated text of the parameter or the parameter itself.
-        /// </summary>
-        public static string GetLocalizedText(string origin)
-        {
-            TryGetLocalizedText(origin, out var result);
-
-            return result;
-        }
         public static bool TryGetLocalizedText(string origin,out string strOut)
         {
-            var table = Current.MappingTable;
-            var result = table.Find(x => x.Origin == origin);
-            strOut = result?.Content ?? origin;
-
-            return result is not null;
+            var translations = Current.GetTranslations();
+            if (translations.TryGetValue(origin, out var content))
+            {
+                strOut = content;
+                return true;
+            }
+            
+            strOut = origin;
+            return false;
         }
         static Language _current = Language.Default;
     }

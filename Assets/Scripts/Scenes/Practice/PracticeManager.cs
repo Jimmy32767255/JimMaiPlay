@@ -5,7 +5,7 @@ using MajdataPlay.Extensions;
 using MajdataPlay.Scenes.Game;
 using MajdataPlay.IO;
 using MajdataPlay.Numerics;
-using MajdataPlay.Unsafe;
+using MajdataPlay.UnsafeKit;
 using MajdataPlay.Utils;
 using MajSimai;
 using System;
@@ -60,6 +60,10 @@ namespace MajdataPlay.Scenes.Practice
         readonly SwitchStatistic[] _buttonStatistics = new SwitchStatistic[12];
         readonly SwitchStatistic[] _sensorStatistics = new SwitchStatistic[33];
 
+        void Awake()
+        {
+            InputManager.TouchButtonRingEdge = 4.8f;
+        }
         private void Start()
         {
             _gameInfo = Majdata<GameInfo>.Instance!;
@@ -242,6 +246,7 @@ namespace MajdataPlay.Scenes.Practice
             {
                 btnA5Statistic.IsClickEventUsed = true;
                 _isExited = true;
+                MajEnv.Settings.Mod.PlaybackSpeed = 1;
                 MajInstances.SceneSwitcher.SwitchScene("List", false);
                 throw new OperationCanceledException();
             }
@@ -249,13 +254,13 @@ namespace MajdataPlay.Scenes.Practice
         void SensorCheck()
         {
             // Start Time "<"
-            ref var e6Statistic = ref _sensorStatistics[(int)SensorArea.E6];
+            ref var e6Statistic = ref _sensorStatistics[(int)SensorArea.A6];
             // Start Time ">"
             ref var b5Statistic = ref _sensorStatistics[(int)SensorArea.B5];
             // End Time "<"
             ref var b4Statistic = ref _sensorStatistics[(int)SensorArea.B4];
             // End Time ">"
-            ref var e4Statistic = ref _sensorStatistics[(int)SensorArea.E4];
+            ref var e4Statistic = ref _sensorStatistics[(int)SensorArea.A4];
             //Playback Speed "<"
             ref var e8Statistic = ref _sensorStatistics[(int)SensorArea.E8];
             ref var b7Statistic = ref _sensorStatistics[(int)SensorArea.B7];
@@ -345,6 +350,7 @@ namespace MajdataPlay.Scenes.Practice
             _playbackSpeed = Mathf.Max(_playbackSpeed , 0.01f);
             if(needUpdatePBSValue)
             {
+                _playbackSpeed = MathF.Round(_playbackSpeed, 2);
                 _playbackSpeedValue.text = ZString.Format("{0:F2}", _playbackSpeed);
             }
             var pressTime = Mathf.Max(Mathf.Max(Mathf.Max(e6Statistic.PressTime, b5Statistic.PressTime), b4Statistic.PressTime), e4Statistic.PressTime);
@@ -444,6 +450,7 @@ namespace MajdataPlay.Scenes.Practice
         private void OnDestroy()
         {
             cts?.Cancel();
+            InputManager.TouchButtonRingEdge = 5.4f;
             _audioTrack?.Stop();
             _audioTrack = null;
             _isExited = true;

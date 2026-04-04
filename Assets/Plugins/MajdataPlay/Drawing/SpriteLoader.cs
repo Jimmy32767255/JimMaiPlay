@@ -1,0 +1,126 @@
+using Cysharp.Threading.Tasks;
+using MajdataPlay.Drawing;
+using SkiaSharp;
+using SkiaSharp.Unity;
+using System;
+using System.Buffers;
+using System.IO;
+using System.Net;
+using System.Net.Http;
+using System.Security.Policy;
+using System.Text;
+using System.Threading;
+using System.Threading.Tasks;
+using UnityEngine;
+
+namespace MajdataPlay.Drawing
+{
+    public static class SpriteLoader
+    {
+        public static Sprite EmptySprite
+        {
+            get
+            {
+                return Sprite.Create(new Texture2D(0, 0), new Rect(0, 0, 0, 0), new Vector2(0.5f, 0.5f));
+            }
+        }
+
+        //readonly static Sprite _emptySprite = Sprite.Create(new Texture2D(0, 0), new Rect(0, 0, 0, 0), new Vector2(0.5f, 0.5f));
+        public static Sprite Load(string path, bool markNonReadable = true)
+        {
+            if (!File.Exists(path))
+            {
+                return Sprite.Create(new Texture2D(0, 0), new Rect(0, 0, 0, 0), new Vector2(0.5f, 0.5f));
+            }
+            var bytes = File.ReadAllBytes(path);
+            var texture = new Texture2D(0, 0);
+            texture.LoadImage(bytes, markNonReadable);
+            return Sprite.Create(texture, new Rect(0, 0, texture.width, texture.height), new Vector2(0.5f, 0.5f));
+        }
+
+        public static async Task<Sprite> LoadAsync(string path, CancellationToken ct = default)
+        {
+            try
+            {
+                await UniTask.SwitchToThreadPool();
+                if (!File.Exists(path))
+                {
+                    await UniTask.SwitchToMainThread();
+                    return Sprite.Create(new Texture2D(0, 0), new Rect(0, 0, 0, 0), new Vector2(0.5f, 0.5f));
+                }
+                var bytes = await File.ReadAllBytesAsync(path, ct);
+                ct.ThrowIfCancellationRequested();
+                var texture = await ImageDecodeAsync(bytes);
+                await UniTask.SwitchToMainThread();
+                return Sprite.Create(texture, new Rect(0, 0, texture.width, texture.height), new Vector2(0.5f, 0.5f));
+            }
+            finally
+            {
+                await UniTask.SwitchToThreadPool();
+            }
+        }
+        public static async Task<Sprite> LoadAsync(string path, Vector4 border, CancellationToken ct = default)
+        {
+            try
+            {
+                await UniTask.SwitchToThreadPool();
+                if (!File.Exists(path))
+                {
+                    await UniTask.SwitchToMainThread();
+                    return Sprite.Create(new Texture2D(0, 0), new Rect(0, 0, 0, 0), new Vector2(0.5f, 0.5f));
+                }
+                var bytes = await File.ReadAllBytesAsync(path, ct);
+                ct.ThrowIfCancellationRequested();
+                var texture = await ImageDecodeAsync(bytes);
+                await UniTask.SwitchToMainThread();
+                return Sprite.Create(texture, new Rect(0, 0, texture.width, texture.height), new Vector2(0.5f, 0.5f), 100, 1,
+                    SpriteMeshType.FullRect, border);
+            }
+            finally
+            {
+                await UniTask.SwitchToThreadPool();
+            }
+        }
+        public static async Task<Sprite> LoadAsync(ReadOnlyMemory<byte> buffer, CancellationToken ct = default)
+        {
+            try
+            {
+                await UniTask.SwitchToThreadPool();
+                ct.ThrowIfCancellationRequested();
+                var texture = await ImageDecodeAsync(buffer);
+                await UniTask.SwitchToMainThread();
+                return Sprite.Create(texture, new Rect(0, 0, texture.width, texture.height), new Vector2(0.5f, 0.5f));
+            }
+            catch
+            {
+                await UniTask.SwitchToMainThread();
+                return Sprite.Create(new Texture2D(0, 0), new Rect(0, 0, 0, 0), new Vector2(0.5f, 0.5f));
+            }
+            finally
+            {
+                await UniTask.SwitchToThreadPool();
+            }
+        }
+
+        public static Sprite Load(string path, Vector4 border, bool markNonReadable = true)
+        {
+            if (!File.Exists(path))
+            {
+                return Sprite.Create(new Texture2D(0, 0), new Rect(0, 0, 0, 0), new Vector2(0.5f, 0.5f));
+            }
+            var bytes = File.ReadAllBytes(path);
+            var texture = new Texture2D(0, 0);
+            texture.LoadImage(bytes, markNonReadable);
+            return Sprite.Create(texture, new Rect(0, 0, texture.width, texture.height), new Vector2(0.5f, 0.5f), 100, 1,
+                SpriteMeshType.FullRect, border);
+        }
+        async static UniTask<Texture2D> ImageDecodeAsync(ReadOnlyMemory<byte> data)
+        {
+            using var bitmap = await Task.Run(() =>
+            {
+                return SKBitmap.Decode(data.Span);
+            });
+            return await bitmap.ToTexture2DAsync();
+        }
+    }
+}

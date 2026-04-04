@@ -13,6 +13,7 @@ using System.Linq;
 using System.Runtime.InteropServices;
 using System.Threading;
 using System.Threading.Tasks;
+using MajdataPlay.Net;
 using UnityEngine;
 #nullable enable
 namespace MajdataPlay.Scenes.List
@@ -37,6 +38,8 @@ namespace MajdataPlay.Scenes.List
         bool _isInited = false;
         bool _isExited = false;
 
+        bool _isOnlineEnabled = false;
+
         bool _isPlayedExplosion = false;
 
         float _autoSlideTimer = 0f;
@@ -58,8 +61,8 @@ namespace MajdataPlay.Scenes.List
         void Awake()
         {
             Majdata<ListManager>.Instance = this;
-
-            if(AllBackgroundTasks.Count > 4096)
+            InputManager.TouchButtonRingEdge = 4.8f;
+            if (AllBackgroundTasks.Count > 4096)
             {
                 var indexs = Pool<int>.RentArray(AllBackgroundTasks.Count);
                 try
@@ -97,6 +100,7 @@ namespace MajdataPlay.Scenes.List
                     }
                 }
             }
+            _isOnlineEnabled = MajEnv.Settings.Online.Enable;
             InputManager.BindAnyArea(OnAnyInput);
         }
         void Start()
@@ -153,6 +157,7 @@ namespace MajdataPlay.Scenes.List
         {
             _isExited = true;
             _cts.Cancel();
+            InputManager.TouchButtonRingEdge = 5.4f;
             InputManager.UnbindAnyArea(OnAnyInput);
             Majdata<ListManager>.Free();
             MajEnv.SharedHttpClient.CancelPendingRequests();
@@ -167,7 +172,7 @@ namespace MajdataPlay.Scenes.List
             SensorCheck();
             ButtonCheck();
             _inactiveTimeSec += MajTimeline.UnscaledDeltaTime;
-            if (TimeSpan.FromSeconds(_inactiveTimeSec) > TimeSpan.FromMinutes(MAX_ALLOWED_INACTIVE_TIME_MIN))
+            if (_isOnlineEnabled && TimeSpan.FromSeconds(_inactiveTimeSec) > TimeSpan.FromMinutes(MAX_ALLOWED_INACTIVE_TIME_MIN))
             {
                 EnterLogin();
                 return;
@@ -295,20 +300,6 @@ namespace MajdataPlay.Scenes.List
             ref var a8Statistic = ref _buttonPressTimes[(int)ButtonZone.A8];
             ref var p1Statistic = ref _buttonPressTimes[(int)ButtonZone.P1];
 
-            if (a8Statistic.IsClicked)
-            {
-                _coverListDisplayer.SlideDifficulty(-1);
-                var list = new string[] { "easy.wav", "basic.wav", "advanced.wav", "expert.wav", "master.wav", "remaster.wav", "original.wav" };
-                MajInstances.AudioManager.PlaySFX(list[(int)_listConfig.SelectedDiff]);
-            }
-            else if (a1Statistic.IsClicked)
-            {
-                _coverListDisplayer.SlideDifficulty(1);
-                var list = new string[] { "easy.wav", "basic.wav", "advanced.wav", "expert.wav", "master.wav", "remaster.wav", "original.wav" };
-                MajInstances.AudioManager.PlaySFX(list[(int)_listConfig.SelectedDiff]);
-            }
-            
-
             if (a3Statistic.IsPressed)
             {
                 _delta = 1;
@@ -428,13 +419,12 @@ namespace MajdataPlay.Scenes.List
                     _coverListDisplayer.SwitchToDirList();
                     LedRing.SetButtonLight(Color.white, 4);
                     SongStorage.WorkingCollection.Index = 0;
-                    return;
                 }
-                if (_coverListDisplayer.IsDirList)
+                else if (_isOnlineEnabled && _coverListDisplayer.IsDirList)
                 {
                     EnterLogin();
-                    return;
                 }
+                return;
             }
             else
             {
@@ -477,6 +467,19 @@ namespace MajdataPlay.Scenes.List
                 MajInstances.SceneSwitcher.SwitchScene("Setting");
                 _isExited = true;
                 return;
+            }
+
+            if (a8Statistic.IsClicked)
+            {
+                _coverListDisplayer.SlideDifficulty(-1);
+                var list = new string[] { "easy.wav", "basic.wav", "advanced.wav", "expert.wav", "master.wav", "remaster.wav", "original.wav" };
+                MajInstances.AudioManager.PlaySFX(list[(int)_listConfig.SelectedDiff]);
+            }
+            else if (a1Statistic.IsClicked)
+            {
+                _coverListDisplayer.SlideDifficulty(1);
+                var list = new string[] { "easy.wav", "basic.wav", "advanced.wav", "expert.wav", "master.wav", "remaster.wav", "original.wav" };
+                MajInstances.AudioManager.PlaySFX(list[(int)_listConfig.SelectedDiff]);
             }
         }
         void EnterGame()
@@ -561,7 +564,7 @@ namespace MajdataPlay.Scenes.List
             }
             if (!task.IsCompletedSuccessfully)
             {
-                sceneSwitcher.SetLoadingText("MAJTEXT_SCAN_CHARTS_FAILED".i18n(), Color.red);
+                sceneSwitcher.SetLoadingText("MAJTEXT_ERR_SCAN_CHARTS_FAILED".i18n(), Color.red);
             }
             else
             {
@@ -608,6 +611,7 @@ namespace MajdataPlay.Scenes.List
             _pressTime = 0;
             _isExited = true;
             MajInstances.AudioManager.StopSFX("bgm_select.mp3");
+            ScoreManager.UnloadOnlineScores();
             EnterLoginBackgroundAsync();
         }
         async void EnterLoginBackgroundAsync()
@@ -640,7 +644,21 @@ namespace MajdataPlay.Scenes.List
             {
                 return Task.CompletedTask;
             }
-            return Task.WhenAll(AllBackgroundTasks);
+            var isAnyRunning = false;
+            using var tasks = new RentedList<Task>();
+            foreach(var task in AllBackgroundTasks)
+            {
+                if (!task.IsCompleted)
+                {
+                    isAnyRunning |= true;
+                    tasks.Add(task);
+                }
+            }
+            if (!isAnyRunning)
+            {
+                return Task.CompletedTask;
+            }
+            return Task.WhenAll(tasks);
         }
     }
 }

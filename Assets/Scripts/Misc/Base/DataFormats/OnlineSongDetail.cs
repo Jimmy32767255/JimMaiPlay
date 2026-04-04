@@ -5,6 +5,7 @@ using MajdataPlay.IO;
 using MajdataPlay.Net;
 using MajdataPlay.Numerics;
 using MajdataPlay.Utils;
+using MajdataPlay.Drawing;
 using MajSimai;
 using NeoSmart.AsyncLock;
 using System;
@@ -21,6 +22,7 @@ using System.Threading;
 using System.Threading.Tasks;
 using UnityEngine;
 using UnityEngine.Networking;
+using MajdataPlay.Settings;
 
 #nullable enable
 namespace MajdataPlay
@@ -75,6 +77,8 @@ namespace MajdataPlay
         WeakReference<Sprite> _fullSizeCoverRef = new(null!);
         SimaiFile? _maidata = null;
 
+        ChartSetting _chartSettings;
+
         readonly AsyncLock _previewAudioTrackLock = new();
         readonly AsyncLock _audioTrackLock = new();
         readonly AsyncLock _videoPathLock = new();
@@ -89,8 +93,8 @@ namespace MajdataPlay
         }
         public OnlineSongDetail(ApiEndpoint serverInfo, MajnetSongDetail songDetail)
         {
-            var apiroot = $"{serverInfo.Url}/maichart";
-
+            var apiroot = serverInfo.Url.Combine($"maichart/{songDetail.Id}/");
+            
             Title = songDetail.Title;
             Artist = songDetail.Artist;
             for (var i = 0; i < 7; i++)
@@ -101,19 +105,14 @@ namespace MajdataPlay
                 }
                 _levels[i] = songDetail.Levels[i];
             }
-            var maidataUriStr = $"{apiroot}/{songDetail.Id}/chart";
-            var trackUriStr = $"{apiroot}/{songDetail.Id}/track";
-            var fullSizeCoverUriStr = $"{apiroot}/{songDetail.Id}/image?fullimage=true";
-            var videoUriStr = $"{apiroot}/{songDetail.Id}/video";
-            var coverUriStr = $"{apiroot}/{songDetail.Id}/image";
-
-            _maidataUri = new Uri(maidataUriStr);
-            _trackUri = new Uri(trackUriStr);
-            _fullSizeCoverUri = new Uri(fullSizeCoverUriStr);
-            _videoUri = new Uri(videoUriStr);
-            _coverUri = new Uri(coverUriStr);
+            _maidataUri = apiroot.Combine("chart");
+            _trackUri = apiroot.Combine("track");
+            _fullSizeCoverUri = apiroot.Combine("image?fullimage=true");
+            _videoUri = apiroot.Combine("video");
+            _coverUri = apiroot.Combine("image");
 
             Hash = songDetail.Hash;
+            _chartSettings = ChartSettingStorage.GetSetting(Hash);
             _hashHexStr = HashHelper.ToHexString(Convert.FromBase64String(Hash));
             _serverInfo = serverInfo;
             _cachePath = Path.Combine(MajEnv.CachePath, $"Net/{_serverInfo.Name}/{_hashHexStr}");
@@ -203,7 +202,11 @@ namespace MajdataPlay
             ThrowIfDisposed();
             try
             {
-                if (_videoPath is not null)
+                if (_chartSettings.DisableVideoBG)
+                {
+                    return string.Empty;
+                }
+                else if (_videoPath is not null)
                 {
                     return _videoPath;
                 }
@@ -227,6 +230,11 @@ namespace MajdataPlay
                         _videoPath = string.Empty;
                         return _videoPath;
                     }
+
+                    if (MajInstances.Settings.Display.SkipVideoDownload)
+                    {
+                        return string.Empty;
+                    }
                     for (var i = 0; i <= MajEnv.HTTP_REQUEST_MAX_RETRY; i++)
                     {
                         try
@@ -249,13 +257,13 @@ namespace MajdataPlay
                                 }
                                 if(getReq.result is (UnityWebRequest.Result.Success or UnityWebRequest.Result.ProtocolError))
                                 {
-                                    if(getReq.responseCode != (long)HttpStatusCode.OK)
+                                    if(getReq.responseCode == (long)HttpStatusCode.NotFound)
                                     {
                                         using var _ = File.Create(cacheFlagPath);
                                         _videoPath = string.Empty;
                                         return _videoPath;
                                     }
-                                    else if(getReq.responseCode == (long)HttpStatusCode.NotFound)
+                                    else
                                     {
                                         break;
                                     }
@@ -265,7 +273,7 @@ namespace MajdataPlay
                             var httpClient = MajEnv.SharedHttpClient;
                             using var rsp = await httpClient.GetAsync(_videoUri, HttpCompletionOption.ResponseHeadersRead, token);
 
-                            if (rsp.StatusCode != HttpStatusCode.OK)
+                            if (rsp.StatusCode == HttpStatusCode.NotFound)
                             {
                                 using var _ = File.Create(cacheFlagPath);
                                 _videoPath = string.Empty;
@@ -763,7 +771,7 @@ namespace MajdataPlay
                     }
                     else
                     {
-                        var header = request.GetResponseHeader("hash");
+                        var header = request.GetResponseHeader("Hash") ?? request.GetResponseHeader("hash");
                         if (!string.IsNullOrEmpty(header))
                         {
                             var hash = header;
@@ -816,10 +824,19 @@ namespace MajdataPlay
                     else
                     {
                         fileStream.Position = 0;
-                        var currentHash = SHA256.Create().ComputeHash(fileStream);
-                        if (fileSHA256 != Convert.ToBase64String(currentHash))
+                        var currentHashBytes = SHA256.Create().ComputeHash(fileStream);
+                        var currentHash = Convert.ToBase64String(currentHashBytes);
+                        if (fileSHA256 != currentHash)
                         {
-                            continue;
+                            MajDebug.LogWarning($"Hash mismatch for online resource\nOrigin: {fileSHA256}\nLocal: {currentHash}");
+                            if (i == MajEnv.HTTP_REQUEST_MAX_RETRY)
+                            {
+                                throw new HttpException(uri.OriginalString, HttpErrorCode.IntegrityCheckFailed);
+                            }
+                            else
+                            {
+                                continue;
+                            }
                         }
                     }
                     File.Create(cacheFlagPath).Dispose();
@@ -888,7 +905,7 @@ namespace MajdataPlay
                         }
                         else
                         {
-                            if (rsp.Headers.TryGetValues("hash", out var values))
+                            if (rsp.Headers.TryGetValues("hash", out var values) || rsp.Headers.TryGetValues("Hash", out values))
                             {
                                 var hash = values.FirstOrDefault();
                                 if (!string.IsNullOrEmpty(hash))
@@ -932,10 +949,19 @@ namespace MajdataPlay
                         else
                         {
                             fileStream.Position = 0;
-                            var currentHash = SHA256.Create().ComputeHash(fileStream);
-                            if(fileSHA256 != Convert.ToBase64String(currentHash))
+                            var currentHashBytes = SHA256.Create().ComputeHash(fileStream);
+                            var currentHash = Convert.ToBase64String(currentHashBytes);
+                            if (fileSHA256 != currentHash)
                             {
-                                continue;
+                                MajDebug.LogWarning($"Hash mismatch for online resource\nOrigin: {fileSHA256}\nLocal: {currentHash}");
+                                if (i == MajEnv.HTTP_REQUEST_MAX_RETRY)
+                                {
+                                    throw new HttpException(uri.OriginalString, HttpErrorCode.IntegrityCheckFailed);
+                                }
+                                else
+                                {
+                                    continue;
+                                }
                             }
                         }
                         

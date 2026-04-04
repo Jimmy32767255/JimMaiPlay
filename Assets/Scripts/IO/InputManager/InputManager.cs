@@ -1,13 +1,19 @@
-﻿using HidSharp;
+#if UNITY_STANDALONE
+using HidSharp;
 using HidSharp.Platform.Windows;
+using LibUsbDotNet;
+using LibUsbDotNet.Main;
+#endif
 using MajdataPlay.Collections;
 using MajdataPlay.Numerics;
 using MajdataPlay.Settings;
+using MajdataPlay.UnsafeKit;
 using MajdataPlay.Utils;
 using System;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Drawing;
+using System.IO.Pipes;
 using System.IO.Ports;
 using System.Linq;
 using System.Runtime.CompilerServices;
@@ -15,6 +21,7 @@ using System.Security.Policy;
 using System.Threading;
 using UnityEngine;
 using UnityEngine.InputSystem.EnhancedTouch;
+using UnityEngine.Profiling;
 //using Microsoft.Win32;
 //using System.Windows.Forms;
 //using Application = UnityEngine.Application;
@@ -28,21 +35,34 @@ namespace MajdataPlay.IO
         {
             get
             {
+#if UNITY_STANDALONE
                 return TouchPanel.IsConnected;
+#else
+                return false;
+#endif
             }
         }
         public static bool IsButtonRingConnected
         {
             get
             {
+#if UNITY_STANDALONE
                 return ButtonRing.IsConnected;
+#else
+                return false;
+#endif
             }
+        }
+        public static float TouchButtonRingEdge
+        {
+            get => _lastTouchButtonRingEdge;
+            set => _lastTouchButtonRingEdge = value;
         }
         public static float FingerRadius
         {
             get
             {
-                return MajEnv.Settings.IO.InputDevice.TouchPanel.TouchSimulationRadius;
+                return MajEnv.Settings.Debug.TouchSimulationRadius;
             }
         }
         public static ReadOnlySpan<SwitchStatus> ButtonStatusInThisFrame
@@ -65,7 +85,12 @@ namespace MajdataPlay.IO
             [MethodImpl(MethodImplOptions.AggressiveInlining)]
             get => _sensorStatusInPreviousFrame;
         }
-#if UNITY_ANDROID
+#if UNITY_ANDROID || UNITY_IOS
+        public static ReadOnlySpan<int> ButtonClickedCountInThisFrame
+        {
+            [MethodImpl(MethodImplOptions.AggressiveInlining)]
+            get => _btnClickedCountInThisFrame;
+        }
         public static ReadOnlySpan<int> SensorClickedCountInThisFrame
         {
             [MethodImpl(MethodImplOptions.AggressiveInlining)]
@@ -78,6 +103,22 @@ namespace MajdataPlay.IO
             get
             {
                 return _sensorStates.Span;
+            }
+        }
+        public static ReadOnlySpan<Vector4> UnitCircle
+        {
+            [MethodImpl(MethodImplOptions.AggressiveInlining)]
+            get
+            {
+                return _unitCircle.Span;
+            }
+        }
+        public static ReadOnlySpan<ulong> TouchPanelPositionSamples
+        {
+            [MethodImpl(MethodImplOptions.AggressiveInlining)]
+            get
+            {
+                return new ReadOnlySpan<ulong>(_posData, 1280 * 1280);
             }
         }
 
@@ -265,7 +306,8 @@ namespace MajdataPlay.IO
         readonly static Memory<bool> _sensorStates = new bool[35];
         readonly static SwitchStatus[] _sensorStatusInPreviousFrame = new SwitchStatus[33];
         readonly static SwitchStatus[] _sensorStatusInThisFrame = new SwitchStatus[33];
-#if UNITY_ANDROID
+#if UNITY_ANDROID || UNITY_IOS
+        readonly static int[] _btnClickedCountInThisFrame = new int[8];
         readonly static int[] _sensorClickedCountInThisFrame = new int[33];
 #endif
 
@@ -274,14 +316,17 @@ namespace MajdataPlay.IO
         readonly static bool _isSensorDebounceEnabled = false;
         readonly static bool _isSensorRendererEnabled = false;
 
-        readonly static IOThreadSynchronization _ioThreadSync = new IOThreadSynchronization();
-
         static IReadOnlyDictionary<int, int> _instanceID2SensorIndexMappingTable = new Dictionary<int, int>();
+
+#if UNITY_STANDALONE
+        readonly static IOThreadSynchronization _ioThreadSync = new IOThreadSynchronization();     
 
         static SerialPortConnInfo _touchPanelSerialConnInfo = default;
         static SerialPortConnInfo _ledDeviceSerialConnInfo = default;
         static HidConnInfo _ledDeviceHidConnInfo = default;
         static HidConnInfo _buttonRingHidConnInfo = default;
+        static UsbConnInfo _touchPanelUsbConnInfo = default;
+#endif
 
         static int _playerIndex = 1;
         static DeviceManufacturerOption _deviceManufacturer = DeviceManufacturerOption.General;
@@ -289,12 +334,21 @@ namespace MajdataPlay.IO
         static InputManager()
         {
             _isSensorRendererEnabled = MajEnv.Settings.Debug.DisplaySensor;
+#if UNITY_STANDALONE
             _btnDebounceThresholdMs = TimeSpan.FromMilliseconds(MajInstances.Settings.IO.InputDevice.ButtonRing.DebounceThresholdMs);
             _btnPollingRateMs = TimeSpan.FromMilliseconds(MajInstances.Settings.IO.InputDevice.ButtonRing.PollingRateMs);
             _sensorDebounceThresholdMs = TimeSpan.FromMilliseconds(MajInstances.Settings.IO.InputDevice.TouchPanel.DebounceThresholdMs);
             _sensorPollingRateMs = TimeSpan.FromMilliseconds(MajInstances.Settings.IO.InputDevice.TouchPanel.PollingRateMs);
             _isBtnDebounceEnabled = MajInstances.Settings.IO.InputDevice.ButtonRing.Debounce;
             _isSensorDebounceEnabled = MajInstances.Settings.IO.InputDevice.TouchPanel.Debounce;
+#else
+            _btnDebounceThresholdMs = TimeSpan.Zero;
+            _btnPollingRateMs = TimeSpan.Zero;
+            _sensorDebounceThresholdMs = TimeSpan.Zero;
+            _sensorPollingRateMs = TimeSpan.Zero;
+            _isBtnDebounceEnabled = false;
+            _isSensorDebounceEnabled = false;
+#endif
             for (var i = 0; i < 33; i++)
             {
                 if (i.InRange(0, 7))
@@ -303,16 +357,22 @@ namespace MajdataPlay.IO
                 }
                 _sensorLastTriggerTimes[i] = TimeSpan.Zero;
             }
-            var len = _cachedPositions.Length;
-            for (var i = 0; i < len; i++)
+            _posData = UnsafeHelper.Alloc<ulong>(1280 * 1280);
+            var samples = new Vector4[TOUCH_ANGLE_SMAPLE_COUNT];
+            var step = 2f * Mathf.PI / TOUCH_ANGLE_SMAPLE_COUNT;
+
+            for (int i = 0; i < TOUCH_ANGLE_SMAPLE_COUNT; i++)
             {
-                _cachedPositions[i] = new ulong?[len];
+                var angle = step * i;
+                samples[i] = new Vector3(Mathf.Sin(angle), Mathf.Cos(angle));
             }
+
+            _unitCircle = samples;
             //for (var i = 0; i < 8; i++)
             //{
             //    _touchRecords.Add((SensorArea)i, new(10));
             //}
-            MajEnv.OnApplicationQuit += OnApplicationQuit;
+            GameManager.OnAppQuit += OnApplicationQuit;
         }
         internal static void Init(IReadOnlyDictionary<int, int> instanceID2SensorIndexMappingTable)
         {
@@ -321,9 +381,32 @@ namespace MajdataPlay.IO
             _instanceID2SensorIndexMappingTable = instanceID2SensorIndexMappingTable;
             _lastScreenHeight = Screen.height;
             _lastScreenWidth = Screen.width;
+
+            for (var x = -540; x <= 540; x++)
+            {
+                for (var y = -540; y <= 540; y++)
+                {
+                    var point = new Vector3(x / 100f, y / 100f, -10);
+                    var ray = new Ray(point, Vector3.forward);
+                    var ishit = Physics.Raycast(ray, out var hitInfom);
+                    ref var posData = ref _posData[(x + 540) * 1280 + (y + 540)];
+                    if (ishit)
+                    {
+                        var id = hitInfom.colliderInstanceID;
+                        if (_instanceID2SensorIndexMappingTable.TryGetValue(id, out var index))
+                        {
+                            posData |= 1UL << (index + 12);
+                        }
+                    }
+                }
+            }
 #if UNITY_STANDALONE
             IODeviceDetect();
+#endif
+#if UNITY_STANDALONE || UNITY_ANDROID || UNITY_IOS
             ButtonRing.Init();
+#endif
+#if UNITY_STANDALONE
             TouchPanel.Init();
             LedDevice.Init();
 #endif
@@ -405,6 +488,7 @@ namespace MajdataPlay.IO
         //        FingerRadius = FingerRadius
         //    };
         //}
+#if UNITY_STANDALONE
         static void IODeviceDetect()
         {
             const int YUAN_HID_1P_PID = 22352;
@@ -413,12 +497,19 @@ namespace MajdataPlay.IO
             const int YUAN_HID_2P_VID = 11852;
             const int DAO_HID_PID = 4644;
             const int DAO_HID_VID = 3727;
+            const int NOV_USB_PID = 0x3003;
+            const int NOV_USB_VID = 0x3356;
             const int GENERAL_HID_1P_PID = 33;
             const int GENERAL_HID_1P_VID = 3235;
             const int GENERAL_HID_2P_PID = 33;
             const int GENERAL_HID_2P_VID = 3235;
 
             var hidDevices = HidManager.Devices;
+#if UNITY_STANDALONE_WIN
+            var usbDevices = UsbDevice.AllDevices;
+#else
+            var usbDevices = Array.Empty<UsbRegistry>();
+#endif
 #if ENABLE_IL2CPP
             var serialPorts = "NotSupported";
 #else
@@ -436,6 +527,7 @@ namespace MajdataPlay.IO
             var manufacturer = DeviceManufacturerOption.General;
             var buttonRingType = userButtonRingType ?? ButtonRingDeviceOption.Keyboard;
 
+            MajDebug.LogInfo($"All available USB devices:\n{string.Join('\n', usbDevices.Select(x => $"{x.FullName} (VID {x.Vid}, PID {x.Pid})"))}");
             MajDebug.LogInfo($"All available HID devices:\n{string.Join('\n', hidDevices)}");
             MajDebug.LogInfo($"All available serial ports:\n{string.Join('\n', serialPorts)}");
 
@@ -449,18 +541,25 @@ namespace MajdataPlay.IO
                     _buttonRingDevice = buttonRingType;
                     _touchPanelSerialConnInfo = new()
                     {
-                        Port = touchPanelSettings.SerialPortOptions.Port ?? (playerIndex == 1 ? 3 : 4),
+#if UNITY_STANDALONE_WIN
+                        PortName = "COM" + (touchPanelSettings.SerialPortOptions.Port ?? (playerIndex == 1 ? 3 : 4)),
+#else
+                        PortName = touchPanelSettings.SerialPortOptions.Port ?? WinSerialPortToLinuxPortName((playerIndex == 1 ? 3 : 4)),
+#endif
                         BaudRate = touchPanelSettings.SerialPortOptions.BaudRate ?? 9600,
-                    };
+                    }; 
                     _ledDeviceSerialConnInfo = new()
                     {
-                        Port = ledDeviceSettings.SerialPortOptions.Port ?? (playerIndex == 1 ? 21 : 22),
+#if UNITY_STANDALONE_WIN
+                        PortName = "COM" + (ledDeviceSettings.SerialPortOptions.Port ?? (playerIndex == 1 ? 3 : 4)),
+#else
+                        PortName = ledDeviceSettings.SerialPortOptions.Port ?? WinSerialPortToLinuxPortName((playerIndex == 1 ? 21 : 22)),
+#endif
                         BaudRate = ledDeviceSettings.SerialPortOptions.BaudRate ?? 115200,
                     };
                     return;
                 }
-
-                if (userManufacturer is not null)
+                else if (userManufacturer is not null)
                 {
                     MajDebug.LogInfo("User has set the IO manufacturer and button ring type, use the user-set values");
                     manufacturer = (DeviceManufacturerOption)userManufacturer;
@@ -470,7 +569,11 @@ namespace MajdataPlay.IO
                             buttonRingType = ButtonRingDeviceOption.HID;
                             _touchPanelSerialConnInfo = new()
                             {
-                                Port = touchPanelSettings.SerialPortOptions.Port ?? (playerIndex == 1 ? 3 : 4),
+#if UNITY_STANDALONE_WIN
+                                PortName = "COM" + (touchPanelSettings.SerialPortOptions.Port ?? (playerIndex == 1 ? 3 : 4)),
+#else
+                                PortName = touchPanelSettings.SerialPortOptions.Port ?? WinSerialPortToLinuxPortName((playerIndex == 1 ? 3 : 4)),
+#endif
                                 BaudRate = touchPanelSettings.SerialPortOptions.BaudRate ?? 9600,
                             };
                             _buttonRingHidConnInfo = new()
@@ -483,7 +586,11 @@ namespace MajdataPlay.IO
                             };
                             _ledDeviceSerialConnInfo = new()
                             {
-                                Port = ledDeviceSettings.SerialPortOptions.Port ?? (playerIndex == 1 ? 21 : 22),
+#if UNITY_STANDALONE_WIN
+                                PortName = "COM" + (ledDeviceSettings.SerialPortOptions.Port ?? (playerIndex == 1 ? 3 : 4)),
+#else
+                                PortName = ledDeviceSettings.SerialPortOptions.Port ?? WinSerialPortToLinuxPortName((playerIndex == 1 ? 21 : 22)),
+#endif
                                 BaudRate = ledDeviceSettings.SerialPortOptions.BaudRate ?? 115200,
                             };
                             break;
@@ -491,7 +598,11 @@ namespace MajdataPlay.IO
                             buttonRingType = ButtonRingDeviceOption.HID;
                             _touchPanelSerialConnInfo = new()
                             {
-                                Port = touchPanelSettings.SerialPortOptions.Port ?? (playerIndex == 1 ? 3 : 4),
+#if UNITY_STANDALONE_WIN
+                                PortName = "COM" + (touchPanelSettings.SerialPortOptions.Port ?? (playerIndex == 1 ? 3 : 4)),
+#else
+                                PortName = touchPanelSettings.SerialPortOptions.Port ?? WinSerialPortToLinuxPortName((playerIndex == 1 ? 3 : 4)),
+#endif
                                 BaudRate = touchPanelSettings.SerialPortOptions.BaudRate ?? 9600,
                             };
                             _buttonRingHidConnInfo = new()
@@ -504,7 +615,11 @@ namespace MajdataPlay.IO
                             };
                             _ledDeviceSerialConnInfo = new()
                             {
-                                Port = ledDeviceSettings.SerialPortOptions.Port ?? (playerIndex == 1 ? 21 : 22),
+#if UNITY_STANDALONE_WIN
+                                PortName = "COM" + (ledDeviceSettings.SerialPortOptions.Port ?? (playerIndex == 1 ? 3 : 4)),
+#else
+                                PortName = ledDeviceSettings.SerialPortOptions.Port ?? WinSerialPortToLinuxPortName((playerIndex == 1 ? 21 : 22)),
+#endif
                                 BaudRate = ledDeviceSettings.SerialPortOptions.BaudRate ?? 115200,
                             };
                             break;
@@ -527,6 +642,30 @@ namespace MajdataPlay.IO
                                 OpenPriority = ledDeviceSettings.HidOptions.OpenPriority
                             };
                             break;
+                        case DeviceManufacturerOption.Nov:
+                            buttonRingType = ButtonRingDeviceOption.Keyboard;
+                            _touchPanelUsbConnInfo = new()
+                            {
+                                DeviceName = touchPanelSettings.UsbOptions.DeviceName ?? string.Empty,
+                                ProductId = touchPanelSettings.UsbOptions.ProductId ?? NOV_USB_PID,
+                                VendorId = touchPanelSettings.UsbOptions.VendorId ?? NOV_USB_VID,
+                                Configuration = 1,
+                                Interface = 1,
+                                PacketSize = 64
+                            };
+                            _ledDeviceSerialConnInfo = new()
+                            {
+#if UNITY_STANDALONE_WIN
+                                PortName = "COM" + (ledDeviceSettings.SerialPortOptions.Port ?? (playerIndex == 1 ? 3 : 4)),
+#else
+                                PortName = ledDeviceSettings.SerialPortOptions.Port ?? WinSerialPortToLinuxPortName((playerIndex == 1 ? 21 : 22)),
+#endif
+                                BaudRate = ledDeviceSettings.SerialPortOptions.BaudRate ?? 115200,
+                            };
+                            break;
+                        case DeviceManufacturerOption.Pipe:
+                            buttonRingType = ButtonRingDeviceOption.Pipe;
+                            break;
                     }
                 }
                 else
@@ -535,6 +674,8 @@ namespace MajdataPlay.IO
                     var yuanDefaultHidVID = YUAN_HID_1P_VID;
                     var daoDefaultHidPID = DAO_HID_PID;
                     var daoDefaultHidVID = DAO_HID_VID;
+                    var novDefaultUsbPID = NOV_USB_PID;
+                    var novDefaultUsbVID = NOV_USB_VID;
                     var generalDefaultHidPID = GENERAL_HID_1P_PID;
                     var generalDefaultHidVID = GENERAL_HID_1P_VID;
 
@@ -558,11 +699,19 @@ namespace MajdataPlay.IO
                         var isYuan = x.ProductID == yuanDefaultHidPID && x.VendorID == yuanDefaultHidVID;
                         var isDao = x.ProductID == daoDefaultHidPID && x.VendorID == daoDefaultHidVID;
                         var isGeneral = x.ProductID == generalDefaultHidPID && x.VendorID == generalDefaultHidVID;
+                        var isNov = x.ProductID == novDefaultUsbPID && x.VendorID == novDefaultUsbVID;
                         var result = isYuan || isDao || isGeneral;
 
                         return result;
                     });
-                    if (filteredHidDevices.Count() != 0)
+                    var filteredUsbDevices = usbDevices.Where(x =>
+                    {
+                        var isNov = x.Pid == novDefaultUsbPID && x.Vid == novDefaultUsbVID;
+                        var result = isNov;
+
+                        return result;
+                    });
+                    if (filteredHidDevices.Count() != 0 || filteredUsbDevices.Count() != 0)
                     {
                         if (hidDevices.Any(x => x.ProductID == yuanDefaultHidPID && x.VendorID == yuanDefaultHidVID))
                         {
@@ -575,16 +724,24 @@ namespace MajdataPlay.IO
                                 ProductId = yuanDefaultHidPID,
                                 VendorId = yuanDefaultHidVID,
                                 Exclusice = false,
-                                OpenPriority = OpenPriority.VeryHigh
+                                OpenPriority = HidOpenPriority.VeryHigh
                             };
                             _touchPanelSerialConnInfo = new()
                             {
-                                Port = touchPanelDefaultSerialPort,
+#if UNITY_STANDALONE_WIN
+                                PortName = "COM" + touchPanelDefaultSerialPort,
+#else
+                                PortName = WinSerialPortToLinuxPortName(touchPanelDefaultSerialPort),
+#endif
                                 BaudRate = 9600,
                             };
                             _ledDeviceSerialConnInfo = new()
                             {
-                                Port = ledDeviceDefaultSerialPort,
+#if UNITY_STANDALONE_WIN
+                                PortName = "COM" + ledDeviceDefaultSerialPort,
+#else
+                                PortName = WinSerialPortToLinuxPortName(ledDeviceDefaultSerialPort),
+#endif
                                 BaudRate = 115200,
                             };
                         }
@@ -599,7 +756,7 @@ namespace MajdataPlay.IO
                                 ProductId = daoDefaultHidPID,
                                 VendorId = daoDefaultHidVID,
                                 Exclusice = false,
-                                OpenPriority = OpenPriority.VeryHigh
+                                OpenPriority = HidOpenPriority.VeryHigh
                             };
                             _ledDeviceHidConnInfo = new()
                             {
@@ -607,7 +764,31 @@ namespace MajdataPlay.IO
                                 ProductId = daoDefaultHidPID,
                                 VendorId = daoDefaultHidVID,
                                 Exclusice = false,
-                                OpenPriority = OpenPriority.VeryHigh
+                                OpenPriority = HidOpenPriority.VeryHigh
+                            };
+                        }
+                        else if (usbDevices.Any(x => x.Pid == novDefaultUsbPID && x.Vid == novDefaultUsbVID))
+                        {
+                            MajDebug.LogInfo("Manufacturer detect result: Nov");
+                            manufacturer = DeviceManufacturerOption.Nov;
+                            buttonRingType = ButtonRingDeviceOption.Keyboard;
+                            _touchPanelUsbConnInfo = new()
+                            {
+                                DeviceName = string.Empty,
+                                ProductId = novDefaultUsbPID,
+                                VendorId = novDefaultUsbVID,
+                                Configuration = 1,
+                                Interface = 1,
+                                PacketSize = 64
+                            };
+                            _ledDeviceSerialConnInfo = new()
+                            {
+#if UNITY_STANDALONE_WIN
+                                PortName = "COM" + ledDeviceDefaultSerialPort,
+#else
+                                PortName = WinSerialPortToLinuxPortName(ledDeviceDefaultSerialPort),
+#endif
+                                BaudRate = 115200,
                             };
                         }
                         else if (hidDevices.Any(x => x.ProductID == generalDefaultHidPID && x.VendorID == generalDefaultHidVID))
@@ -617,7 +798,11 @@ namespace MajdataPlay.IO
                             buttonRingType = ButtonRingDeviceOption.HID;
                             _touchPanelSerialConnInfo = new()
                             {
-                                Port = touchPanelDefaultSerialPort,
+#if UNITY_STANDALONE_WIN
+                                PortName = "COM" + touchPanelDefaultSerialPort,
+#else
+                                PortName = WinSerialPortToLinuxPortName(touchPanelDefaultSerialPort),
+#endif
                                 BaudRate = 9600,
                             };
                             _buttonRingHidConnInfo = new()
@@ -626,11 +811,15 @@ namespace MajdataPlay.IO
                                 ProductId = generalDefaultHidPID,
                                 VendorId = generalDefaultHidVID,
                                 Exclusice = false,
-                                OpenPriority = OpenPriority.VeryHigh
+                                OpenPriority = HidOpenPriority.VeryHigh
                             };
                             _ledDeviceSerialConnInfo = new()
                             {
-                                Port = ledDeviceDefaultSerialPort,
+#if UNITY_STANDALONE_WIN
+                                PortName = "COM" + ledDeviceDefaultSerialPort,
+#else
+                                PortName = WinSerialPortToLinuxPortName(ledDeviceDefaultSerialPort),
+#endif
                                 BaudRate = 115200,
                             };
                         }
@@ -641,17 +830,25 @@ namespace MajdataPlay.IO
                     }
                     else
                     {
-                        MajDebug.LogWarning("No HID device detected, fallback to keyboard");
+                        MajDebug.LogWarning("No HID or USB device detected, fallback to keyboard");
                         manufacturer = DeviceManufacturerOption.General;
                         buttonRingType = ButtonRingDeviceOption.Keyboard;
                         _touchPanelSerialConnInfo = new()
                         {
-                            Port = touchPanelDefaultSerialPort,
+#if UNITY_STANDALONE_WIN
+                            PortName = "COM" + touchPanelDefaultSerialPort,
+#else
+                            PortName = WinSerialPortToLinuxPortName(touchPanelDefaultSerialPort),
+#endif
                             BaudRate = 9600,
                         };
                         _ledDeviceSerialConnInfo = new()
                         {
-                            Port = ledDeviceDefaultSerialPort,
+#if UNITY_STANDALONE_WIN
+                            PortName = "COM" + ledDeviceDefaultSerialPort,
+#else
+                            PortName = WinSerialPortToLinuxPortName(ledDeviceDefaultSerialPort),
+#endif
                             BaudRate = 115200,
                         };
                     }
@@ -671,36 +868,79 @@ namespace MajdataPlay.IO
                 _playerIndex = playerIndex;
             }
         }
+#endif
         internal static void OnFixedUpdate()
         {
             //_updateIOListener();
         }
         internal static void OnPreUpdate()
         {
+            Profiler.BeginSample("InputManager.OnPreUpdate");
             var buttons = _buttons.Span;
             var sensors = _sensors.Span;
             
             try
             {
-#if UNITY_STANDALONE
-                ButtonRing.OnPreUpdate();
-                TouchPanel.OnPreUpdate();
-#elif UNITY_ANDROID
+#if UNITY_ANDROID || UNITY_IOS
+                Array.Fill(_btnClickedCountInThisFrame, 0);
                 Array.Fill(_sensorClickedCountInThisFrame, 0);
 #endif
+#if UNITY_STANDALONE || UNITY_ANDROID || UNITY_IOS
+                ButtonRing.OnPreUpdate();
+#endif
+#if UNITY_STANDALONE
+                TouchPanel.OnPreUpdate();
+                
+#endif
+                var debugOptions = MajEnv.Settings.Debug;
+                var displayOptions = MajEnv.Settings.Display;
                 var height = Screen.height;
                 var width = Screen.width;
+                var fingerRad = FingerRadius;
+                var touchRadiusAdjust = debugOptions.TouchRadiusAdjust;
+                var aExtraRad = debugOptions.TouchAAreaExtraRadius;
+                var bExtraRad = debugOptions.TouchBAreaExtraRadius;
+                var cExtraRad = debugOptions.TouchCAreaExtraRadius;
+                var dExtraRad = debugOptions.TouchDAreaExtraRadius;
+                var eExtraRad = debugOptions.TouchEAreaExtraRadius;
+                var mainScreenTransform = displayOptions.MainScreenTransform;
+                var mainScreenOffset = displayOptions.MainScreenOffset;
 
-                if(height != _lastScreenHeight || width != _lastScreenWidth)
+                var isModified = height != _lastScreenHeight ||
+                                 width != _lastScreenWidth ||
+                                 fingerRad != _lastFingerRadius ||
+                                 aExtraRad != _lastAAreaExtraRadius ||
+                                 bExtraRad != _lastBAreaExtraRadius ||
+                                 cExtraRad != _lastCAreaExtraRadius ||
+                                 dExtraRad != _lastDAreaExtraRadius ||
+                                 eExtraRad != _lastEAreaExtraRadius ||
+                                 touchRadiusAdjust != _lastTouchRadiusAdjust ||
+                                 mainScreenOffset != _lastMainScreenOffset;
+                if (isModified)
                 {
                     _lastScreenWidth = width;
                     _lastScreenHeight = height;
-                    _version++;
+                    _lastFingerRadius = fingerRad;
+                    _lastAAreaExtraRadius = aExtraRad;
+                    _lastBAreaExtraRadius = bExtraRad;
+                    _lastCAreaExtraRadius = cExtraRad;
+                    _lastDAreaExtraRadius = dExtraRad;
+                    _lastEAreaExtraRadius = eExtraRad;
+                    _lastTouchRadiusAdjust = touchRadiusAdjust;
+                    _lastMainScreenTransform = mainScreenTransform;
+                    if(_lastMainScreenTransform)
+                    {
+                        _lastMainScreenOffset = mainScreenOffset;
+                    }
+                    else
+                    {
+                        _lastMainScreenOffset = 1f;
+                    }                    
                 }
-
+                _version++;
                 UpdateMousePosition();
-                UpdateSensorState();
                 UpdateButtonState();
+                UpdateSensorState();
             }
             catch (Exception e)
             {
@@ -712,6 +952,17 @@ namespace MajdataPlay.IO
                 var btn = buttons[i];
                 _btnStatusInPreviousFrame[i] = _btnStatusInThisFrame[i];
                 _btnStatusInThisFrame[i] = btn.State;
+#if UNITY_ANDROID || UNITY_IOS
+                if(i < 8)
+                {
+                    var isClicked = _btnStatusInPreviousFrame[i] == SwitchStatus.Off &&
+                                    (ButtonRing.IsOn(i) || ButtonRing.IsHadOn(i));
+                    if(isClicked)
+                    {
+                        _btnClickedCountInThisFrame[i]++;
+                    }
+                }
+#endif
             }
             for (var i = 0; i < 33; i++)
             {
@@ -719,6 +970,7 @@ namespace MajdataPlay.IO
                 _sensorStatusInPreviousFrame[i] = _sensorStatusInThisFrame[i];
                 _sensorStatusInThisFrame[i] = sen.State;
             }
+            Profiler.EndSample();
         }
         public static void BindAnyArea(EventHandler<InputEventArgs> checker) => OnAnyAreaTrigger += checker;
         public static void BindArea(EventHandler<InputEventArgs> checker, ButtonZone sType)
@@ -940,6 +1192,16 @@ namespace MajdataPlay.IO
             throw new InvalidOperationException();
         }
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        public static bool IsSensorClickedUpInThisFrame(SensorArea target)
+        {
+            //when a sensor is pressed and released
+            ThrowIfSensorIndexOutOfRange(target);
+            var index = (int)target;
+
+            return _sensorStatusInPreviousFrame[index] == SwitchStatus.On &&
+                   _sensorStatusInThisFrame[index] == SwitchStatus.Off;
+        }
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
         public static bool IsSensorClickedInThisFrame(SensorArea target)
         {
             ThrowIfSensorIndexOutOfRange(target);
@@ -1024,9 +1286,13 @@ namespace MajdataPlay.IO
                 button.ClearSubscriber();
             OnAnyAreaTrigger = null;
         }
-        static void OnApplicationQuit()
+        static void OnApplicationQuit(object? sender, EventArgs? e)
         {
-            MajEnv.OnApplicationQuit -= OnApplicationQuit;
+            if (_posData is not null)
+            {
+                UnsafeHelper.Free(_posData);
+            }
+            GameManager.OnAppQuit -= OnApplicationQuit;
         }
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         static void PushEvent(InputEventArgs args)
@@ -1099,6 +1365,11 @@ namespace MajdataPlay.IO
         {
             return (int)area;
         }
+#if UNITY_STANDALONE
+        static string WinSerialPortToLinuxPortName(int port)
+        {
+            return $"/dev/ttyUSB{port - 1}";
+        }
         class IOThreadSynchronization
         {
             public ReadOnlySpan<byte> ReadBuffer
@@ -1117,6 +1388,7 @@ namespace MajdataPlay.IO
             }
             public Memory<byte> WriteBufferMemory { get; set; } = Memory<byte>.Empty;
             public ReadOnlyMemory<byte> ReadBufferMemory { get; set; } = ReadOnlyMemory<byte>.Empty;
+            public NamedPipeClientStream PipeClientStream { get; set; }
 
             readonly EventWaitHandle _eventWaitHandle = new(false, EventResetMode.AutoReset);
 
@@ -1135,12 +1407,22 @@ namespace MajdataPlay.IO
             public int ProductId { get; init; }
             public int VendorId { get; init; }
             public bool Exclusice { get; init; }
-            public OpenPriority OpenPriority { get; init; }
+            public HidOpenPriority OpenPriority { get; init; }
+        }
+        readonly struct UsbConnInfo
+        {
+            public string DeviceName { get; init; }
+            public int ProductId { get; init; }
+            public int VendorId { get; init; }
+            public byte Configuration { get; init; }
+            public int Interface { get; init; }
+            public int PacketSize { get; init; }
         }
         readonly struct SerialPortConnInfo
         {
-            public int Port { get; init; }
+            public string PortName { get; init; }
             public int BaudRate { get; init; }
         }
+#endif
     }
 }
