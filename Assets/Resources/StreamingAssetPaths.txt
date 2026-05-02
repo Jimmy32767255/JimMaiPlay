@@ -45,9 +45,11 @@ MaiCharts/Original/Zunda Overdance/bg.jpg
 MaiCharts/Original/Zunda Overdance/bg.mp4
 MaiCharts/Original/Zunda Overdance/maidata.txt
 MaiCharts/Original/Zunda Overdance/track.opus
+MovieBG/GameOver.webm
 MovieBG/allperfect.webm
 MovieBG/fullcombo.webm
 MovieBG/title.webm
+SFX/GameOver.wav
 SFX/answer.wav
 SFX/answer_clock.wav
 SFX/bgm_dan.mp3
