@@ -145,7 +145,7 @@ namespace MajdataPlay.Scenes.List
                 MajInstances.SceneSwitcher.FadeOut();
                 _coverListDisplayer.SlideToDifficulty((int)_listConfig.SelectedDiff);
                 _isInited = true;
-                LedRing.SetSineFunc(3, Color.green, 1000);
+                LedRing.SetButtonLight(Color.green, 3);
                 LedRing.SetButtonLight(Color.red, 4);
                 LedRing.SetButtonLight(Color.blue, 2);
                 LedRing.SetButtonLight(Color.blue, 5);
@@ -447,24 +447,32 @@ namespace MajdataPlay.Scenes.List
             {
                 //const int MOD_PAGE_INDEX = 5;
                 //MajInstances.GameManager.LastSettingPage = MOD_PAGE_INDEX;
-                SettingManager.JmpToModPage();
+                MajEnv.RuntimeConfig.Setting.SelectedMenu = nameof(GameSetting.Mod);
+                MajEnv.RuntimeConfig.Setting.SelectedOption = string.Empty;
                 if (_coverListDisplayer.Mode == CoverListMode.Directory)
                 {
-                    SettingManager.IgnoreChartSettingPage();
+                    MajEnv.RuntimeConfig.Setting.IgnoreChartSettingPage = true;
                 }
-                MajInstances.SceneSwitcher.SwitchScene("Setting");
+                else
+                {
+                    MajEnv.RuntimeConfig.Setting.IgnoreChartSettingPage = false;
+                }
+                MajInstances.SceneSwitcher.SwitchScene("Setting", false);
                 _isExited = true;
                 return;
             }
             else if (a7Statistic.IsClicked)
             {
                 //MajInstances.GameManager.LastSettingPage = 0;
-                SettingManager.JmpToDefaultPage();
-                if(_coverListDisplayer.Mode == CoverListMode.Directory)
+                if (_coverListDisplayer.Mode == CoverListMode.Directory)
                 {
-                    SettingManager.IgnoreChartSettingPage();
+                    MajEnv.RuntimeConfig.Setting.IgnoreChartSettingPage = true;
                 }
-                MajInstances.SceneSwitcher.SwitchScene("Setting");
+                else
+                {
+                    MajEnv.RuntimeConfig.Setting.IgnoreChartSettingPage = false;
+                }
+                MajInstances.SceneSwitcher.SwitchScene("Setting", false);
                 _isExited = true;
                 return;
             }
@@ -545,7 +553,7 @@ namespace MajdataPlay.Scenes.List
             await sceneSwitcher.FadeInAsync();
             sceneSwitcher.SwitchScene("Empty", false);
             await UniTask.Delay(400);
-            sceneSwitcher.SetLoadingText("Waiting for all background tasks to suspend".i18n());
+            sceneSwitcher.SetLoadingText("MAJTEXT_WAITING_FOR_BACKGROUND_TASKS_SUSPEND".i18n());
             await UniTask.Delay(100);
             var bTasks = WaitForBackgroundTaskSuspendAsync();
             while(!bTasks.IsCompleted)
@@ -571,7 +579,7 @@ namespace MajdataPlay.Scenes.List
                 sceneSwitcher.SetLoadingText(string.Empty);
             }
             await UniTask.Delay(3000);
-            sceneSwitcher.SwitchScene("List");
+            sceneSwitcher.SwitchScene("List", false);
         }
         void EnterDan()
         {
@@ -620,7 +628,7 @@ namespace MajdataPlay.Scenes.List
             await sceneSwitcher.FadeInAsync();
             sceneSwitcher.SwitchScene("Empty", false);
             await UniTask.Delay(400);
-            sceneSwitcher.SetLoadingText("Waiting for all background tasks to suspend".i18n());
+            sceneSwitcher.SetLoadingText("MAJTEXT_WAITING_FOR_BACKGROUND_TASKS_SUSPEND".i18n());
             await UniTask.Delay(100);
             var bTasks = WaitForBackgroundTaskSuspendAsync();
             while (!bTasks.IsCompleted)

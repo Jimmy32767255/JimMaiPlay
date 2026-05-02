@@ -2,6 +2,7 @@ using Cysharp.Threading.Tasks;
 using MajdataPlay.Buffers;
 using MajdataPlay.IO;
 using MajdataPlay.Net;
+using MajdataPlay.Utils;
 using QRCoder;
 using System;
 using System.Linq;
@@ -13,7 +14,6 @@ using System.Threading;
 using System.Threading.Tasks;
 using TMPro;
 using UnityEngine;
-using UnityEngine.EventSystems;
 using UnityEngine.UI;
 using static QRCoder.QRCodeGenerator;
 #nullable enable
@@ -35,9 +35,13 @@ namespace MajdataPlay.Scenes.Login
         GameObject _qrCodeErrorIcon;
 
         [SerializeField]
-        InputField _usernameInput;
+        TMP_InputField _usernameInput;
         [SerializeField]
-        InputField _passwordInput;
+        TMP_InputField _passwordInput;
+        [SerializeField]
+        GameObject _usernameClearButton;
+        [SerializeField]
+        GameObject _passwordClearButton;
         [SerializeField]
         GameObject _button4;
 
@@ -53,7 +57,6 @@ namespace MajdataPlay.Scenes.Login
         Color SucceedColor;
 
         RawImage _qrCodeRawImage = null!;
-        EventSystem _eventSystem = null!;
         ApiEndpoint[] _apiEndpoints = Array.Empty<ApiEndpoint>();
         ApiEndpoint[] _enabledEndpoints = Array.Empty<ApiEndpoint>();
 
@@ -66,7 +69,6 @@ namespace MajdataPlay.Scenes.Login
         {
             _apiEndpoints = MajEnv.ApiEndpoints;
             _qrCodeRawImage = _qrCodeComponent.GetComponent<RawImage>();
-            _eventSystem = GetComponent<EventSystem>();
             using var rentedApiEndpoints = new RentedList<ApiEndpoint>();
             for (var i = 0; i < _apiEndpoints.Length; i++)
             {
@@ -77,11 +79,14 @@ namespace MajdataPlay.Scenes.Login
             _enabledEndpoints = rentedApiEndpoints.ToArray();
             if (_enabledEndpoints.Length == 0)
             {
-                MajInstances.SceneSwitcher.SwitchScene("List");
+                MajInstances.SceneSwitcher.SwitchScene("List", false);
                 return;
             }
             _loading.SetActive(false);
             Hint();
+            _usernameInput.onValueChanged.AddListener(_ => UpdateClearButtons());
+            _passwordInput.onValueChanged.AddListener(_ => UpdateClearButtons());
+            UpdateClearButtons();
             LoginProcessor().Forget();
         }
         void Update()
@@ -100,26 +105,35 @@ namespace MajdataPlay.Scenes.Login
             var isPasswordClearBtnClicked = InputManager.IsSensorClickedUpInThisFrame(SensorArea.A3);
             if(isUsernameInputClicked)
             {
-                _eventSystem.SetSelectedGameObject(null!);
-                _eventSystem.SetSelectedGameObject(_usernameInput.gameObject);
+                Focus(_usernameInput);
             }
             if(isUsernameClearBtnClicked)
             {
-                _eventSystem.SetSelectedGameObject(null!);
-                _eventSystem.SetSelectedGameObject(_usernameInput.gameObject);
+                Focus(_usernameInput);
                 _usernameInput.text = string.Empty;
             }
             if (isPasswordInputClicked)
             {
-                _eventSystem.SetSelectedGameObject(null!);
-                _eventSystem.SetSelectedGameObject(_passwordInput.gameObject);
+                Focus(_passwordInput);
             }
             if (isPasswordClearBtnClicked)
             {
-                _eventSystem.SetSelectedGameObject(null!);
-                _eventSystem.SetSelectedGameObject(_passwordInput.gameObject);
+                Focus(_passwordInput);
                 _passwordInput.text = string.Empty;
             }
+        }
+
+        void UpdateClearButtons()
+        {
+            _usernameClearButton.SetActive(!string.IsNullOrEmpty(_usernameInput.text));
+            _passwordClearButton.SetActive(!string.IsNullOrEmpty(_passwordInput.text));
+        }
+
+        static void Focus(TMP_InputField inputField)
+        {
+            inputField.Select();
+            inputField.ActivateInputField();
+            inputField.MoveTextEnd(false);
         }
 
         async UniTaskVoid LoginProcessor()
@@ -218,7 +232,7 @@ namespace MajdataPlay.Scenes.Login
                                         _loading.SetActive(true);
                                         _isReady = false;
                                         MajDebug.LogDebug("Checking login status");
-                                        var getUserInfoTask = FetchUserInfomationAsync(endpoint);
+                                        var getUserInfoTask = FetchUserDataAsync(endpoint);
                                         while(!getUserInfoTask.IsCompleted)
                                         {
                                             await UniTask.Yield();
@@ -229,8 +243,9 @@ namespace MajdataPlay.Scenes.Login
                                         var userScores = Array.Empty<MajNetAccountSongScore>();
                                         if(getUserInfoTask.IsCompletedSuccessfully)
                                         {
-                                            userInfo = getUserInfoTask.Result.Summary;
-                                            userScores = getUserInfoTask.Result.Scores;
+                                            var userData = getUserInfoTask.Result;
+                                            userInfo = userData.Summary;
+                                            userScores = userData.Scores;
                                         }
                                         ScoreManager.LoadOnlineScores(userScores);
                                         await UpdateApiEndpointRuntimeConfigAsync(endpoint, userInfo);
@@ -286,7 +301,8 @@ namespace MajdataPlay.Scenes.Login
                             authSessionTask = RegistryAuthSession(endpoint, cts.Token);
                         }
                         //cancel button
-                        if (InputManager.IsSensorClickedUpInThisFrame(SensorArea.A5))
+                        if (InputManager.IsSensorClickedUpInThisFrame(SensorArea.A5) ||
+                            InputManager.IsButtonClickedInThisFrame(ButtonZone.A5))
                         {
                             cts.Cancel();
                             if (!string.IsNullOrEmpty(authRequestId))
@@ -294,14 +310,14 @@ namespace MajdataPlay.Scenes.Login
                                 await sceneSwitcher.FadeInAsync();
                                 await RevokeAuthSession(endpoint, authRequestId);
                             }
-                            _eventSystem.SetSelectedGameObject(null!);
                             _usernameInput.DeactivateInputField();
                             _passwordInput.DeactivateInputField();
                             break;
                         }
                         //login button
-                        else if (InputManager.IsSensorClickedUpInThisFrame(SensorArea.A4) 
-                            || (endpoint.AutoLogin == true
+                        else if (InputManager.IsSensorClickedUpInThisFrame(SensorArea.A4) ||
+                            InputManager.IsButtonClickedInThisFrame(ButtonZone.A4) ||
+                            (endpoint.AutoLogin == true
                             && SceneSwitcher.LastScene == MajScenes.Title
                             && !string.IsNullOrEmpty(endpoint.Username)
                             && !string.IsNullOrEmpty(endpoint.Password)))
@@ -311,7 +327,6 @@ namespace MajdataPlay.Scenes.Login
                             _usernameInput.readOnly = true;
                             _passwordInput.readOnly = true;
 
-                            _eventSystem.SetSelectedGameObject(null!);
                             _usernameInput.DeactivateInputField();
                             _passwordInput.DeactivateInputField();
 
@@ -337,36 +352,20 @@ namespace MajdataPlay.Scenes.Login
                             if (!rsp.IsSuccessfully)
                             {
                                 MajDebug.LogError($"Login failed:\nStatusCode:{rsp.StatusCode}\nErrorCode:{rsp.ErrorCode}\nMessage:{rsp.Message}");
-                                var errMsg = string.Empty;
-                                switch(rsp.ErrorCode)
+                                var errMsg = rsp.ErrorCode switch
                                 {
-                                    case HttpErrorCode.Timeout:
-                                        errMsg = "MAJTEXT_LOGIN_CONNECT_TIMEOUT";
-                                        break;
-                                    case HttpErrorCode.InvalidRequest:
-                                        errMsg = rsp.Message;
-                                        break;
-                                    case HttpErrorCode.Unreachable:
-                                        errMsg = "MAJTEXT_LOGIN_CONNECT_UNREACHABLE";
-                                        break;
-                                    case HttpErrorCode.Unsuccessful:
-                                        if (rsp.StatusCode is HttpStatusCode.Unauthorized)
-                                        {
-                                            errMsg = "MAJTEXT_ONLINE_USERNAME_OR_PASSWORD_INCORRECT";
-                                        }
-                                        else if (rsp.StatusCode is HttpStatusCode.MethodNotAllowed)
-                                        {
-                                            errMsg = "MAJTEXT_ONLINE_METHOD_NOT_ALLOWED";
-                                        }
-                                        else
-                                        {
-                                            errMsg = "MAJTEXT_LOGIN_UNKNOWN_ERROR";
-                                        }
-                                        break;
-                                    default:
-                                        errMsg = "MAJTEXT_LOGIN_UNKNOWN_ERROR";
-                                        break;
-                                }
+                                    HttpErrorCode.Timeout => "MAJTEXT_LOGIN_CONNECT_TIMEOUT",
+                                    HttpErrorCode.InvalidRequest => rsp.Message,
+                                    HttpErrorCode.Unreachable => "MAJTEXT_LOGIN_CONNECT_UNREACHABLE",
+                                    HttpErrorCode.Unsuccessful => rsp.StatusCode switch
+                                    {
+                                        HttpStatusCode.Unauthorized => "MAJTEXT_ONLINE_USERNAME_OR_PASSWORD_INCORRECT",
+                                        HttpStatusCode.MethodNotAllowed => "MAJTEXT_ONLINE_METHOD_NOT_ALLOWED",
+                                        HttpStatusCode.Forbidden => "MAJTEXT_ONLINE_ACCESS_FORBIDDEN",
+                                        _ => "MAJTEXT_LOGIN_UNKNOWN_ERROR"
+                                    },
+                                    _ => "MAJTEXT_LOGIN_UNKNOWN_ERROR"
+                                };
                                 Hint($"{"MAJTEXT_LOGIN_LOGIN_FAILED".i18n()}:\n{errMsg.i18n()}", true);
                                 endpoint.AutoLogin = false;
                                 continue;
@@ -376,7 +375,7 @@ namespace MajdataPlay.Scenes.Login
                                 MajDebug.LogInfo("Logged in");
                                 Hint("MAJTEXT_LOGIN_LOGIN_SUCCESS".i18n(), false);
                                 _loading.SetActive(true);
-                                var getUserInfoTask = FetchUserInfomationAsync(endpoint);
+                                var getUserInfoTask = FetchUserDataAsync(endpoint);
                                 if (!string.IsNullOrEmpty(authRequestId))
                                 {
                                     await RevokeAuthSession(endpoint, authRequestId);
@@ -420,14 +419,9 @@ namespace MajdataPlay.Scenes.Login
                 return;
             }
             _isExited = true;
-            if(SceneSwitcher.LastScene == MajScenes.Title)
-            {
-                MajInstances.SceneSwitcher.SwitchScene("List", false);
-                return;
-            }
-            RefreshListBackgroundAsync();
+            RefreshListBackgroundAsync(refreshWholeList:SceneSwitcher.LastScene != MajScenes.Title);
         }
-        static async void RefreshListBackgroundAsync()
+        static async void RefreshListBackgroundAsync(bool refreshWholeList = false)
         {
             var sceneSwitcher = MajInstances.SceneSwitcher;
             await sceneSwitcher.FadeInAsync();
@@ -438,27 +432,54 @@ namespace MajdataPlay.Scenes.Login
             {
                 MajInstances.SceneSwitcher.SetLoadingText(e);
             };
-            var task = SongStorage.RefreshAsync(progress);
-            while (!task.IsCompleted)
+            if (refreshWholeList)
+            {
+                var task = SongStorage.RefreshAsync(progress);
+                while (!task.IsCompleted)
+                {
+                    await UniTask.Yield();
+                }
+                if (!task.IsCompletedSuccessfully)
+                {
+                    sceneSwitcher.SetLoadingText("MAJTEXT_ERR_SCAN_CHARTS_FAILED".i18n(), Color.red);
+                    await UniTask.Delay(3000);
+                }
+                else
+                {
+                    sceneSwitcher.SetLoadingText(string.Empty);
+                }
+            }
+            var task2 = SongStorage.RefreshUserOnlineFavAsync(progress);
+            while (!task2.IsCompleted)
             {
                 await UniTask.Yield();
             }
-            if (!task.IsCompletedSuccessfully)
+            if (!task2.IsCompletedSuccessfully)
             {
-                sceneSwitcher.SetLoadingText("MAJTEXT_ERR_SCAN_CHARTS_FAILED".i18n(), Color.red);
+                sceneSwitcher.SetLoadingText("MAJTEXT_ERR_SCAN_ONLINE_FAV_COLLECTION_FAILED".i18n(), Color.red);
             }
             else
             {
                 sceneSwitcher.SetLoadingText(string.Empty);
             }
-            await UniTask.Delay(3000);
-            sceneSwitcher.SwitchScene("List");
-        }
-        async ValueTask<UserInfo> FetchUserInfomationAsync(ApiEndpoint endpoint, CancellationToken token = default)
-        {
-            var userInfo = await Online.GetUserInfoAsync(endpoint, token);
-            var userScores = await Online.GetUserScoresAsync(endpoint, token);
 
+            
+            sceneSwitcher.SwitchScene("List", false);
+        }
+        async ValueTask<UserData> FetchUserDataAsync(ApiEndpoint endpoint, CancellationToken token = default)
+        {
+            var fetchUserInfoRsp = await Online.GetUserInfoAsync(endpoint, token);
+            var userScores = await Online.GetUserScoresAsync(endpoint, token);
+            var userInfo = default(UserSummary?);
+            if(fetchUserInfoRsp.TryDeserialize(out var userInfoOut, out var e))
+            {
+                userInfo = userInfoOut;
+            }
+            else
+            {
+                MajDebug.LogError("Failed to get user info");
+                MajDebug.LogException(e);
+            }
             token.ThrowIfCancellationRequested();
             return new()
             {
@@ -475,7 +496,7 @@ namespace MajdataPlay.Scenes.Login
                 var result = (UserSummary)userInfo;
                 _loading.SetActive(true);
                 Hint("MAJTEXT_LOGIN_DOWNLOADING_AVATAR".i18n(), false);
-                var avatarTask = Online.GetUserIconAsync(endpoint, result.Username);
+                var avatarTask = Online.GetUserIconAsync(endpoint, result.Username, onError: Hint);
                 while (!avatarTask.IsCompleted)
                 {
                     await UniTask.Yield();
@@ -486,11 +507,6 @@ namespace MajdataPlay.Scenes.Login
                     Hint();
                     runtimeConfig.Avatar = avatarTask.Result;
                     MajDebug.LogInfo("User avatar has been downloaded");
-                }
-                else
-                {
-                    Hint("MAJTEXT_LOGIN_DOWNLOADING_AVATAR_FAILED".i18n(), true);
-                    MajDebug.LogInfo("Failed to download user avatar");
                 }
                 runtimeConfig.Username = result.Username;
             }
@@ -579,8 +595,10 @@ namespace MajdataPlay.Scenes.Login
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         private void Hint(string hintText = "", bool isError = false)
         {
-            if (!string.IsNullOrEmpty(hintText)) 
+            if (!string.IsNullOrEmpty(hintText))
+            {
                 _hintText.color = isError ? ErrorColor : SucceedColor;
+            }
             _hintText.text = hintText;
         }
 
@@ -588,7 +606,7 @@ namespace MajdataPlay.Scenes.Login
         {
             public string RequestId { get; init; }
         }
-        readonly struct UserInfo
+        readonly struct UserData
         {
             public UserSummary? Summary { get; init; }
             public MajNetAccountSongScore[] Scores { get; init; }

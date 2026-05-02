@@ -21,6 +21,7 @@ namespace MajdataPlay
             get; 
             private set; 
         }
+        public static event EventHandler<(MajScenes NewScene, MajScenes OldScene)>? OnSceneChanged;
         public static MajScenes CurrentScene { get; private set; } = MajScenes.Init;
         public static MajScenes LastScene { get; private set; } = MajScenes.Init;
 
@@ -71,12 +72,17 @@ namespace MajdataPlay
                 CurrentScene = Enum.Parse<MajScenes>(SCENE_NAMES[index]);
             }
             LastScene = lastScene;
+            if(OnSceneChanged is not null)
+            {
+                OnSceneChanged(this, (CurrentScene, LastScene));
+            }
+            CabinetLight.SetLight(1.0f);
             _canvas.worldCamera = MainCamera;
         }
 
         public void SwitchScene(string sceneName, bool autoFadeOut = true)
         {
-            SwitchSceneInternal(sceneName,autoFadeOut).Forget();
+            SwitchSceneInternal(sceneName, autoFadeOut).Forget();
         }
         public UniTask SwitchSceneAsync(string sceneName, bool autoFadeOut = true)
         {
@@ -113,6 +119,7 @@ namespace MajdataPlay
             animator.SetBool("In", false);
             loadingText.gameObject.SetActive(false);
             LedRing.SetAllLight(Color.white);
+            CabinetLight.SetLight(1.0f);
         }
         public async UniTask FadeOutAsync()
         {
@@ -120,6 +127,7 @@ namespace MajdataPlay
             await UniTask.Delay(SWITCH_ELAPSED_MS);
             loadingText.gameObject.SetActive(false);
             LedRing.SetAllLight(Color.white);
+            CabinetLight.SetLight(1.0f);
         }
         public void FadeIn()
         {
@@ -127,6 +135,7 @@ namespace MajdataPlay
             loadingText.text = string.Empty;
             loadingText.gameObject.SetActive(true);
             LedRing.SetAllLight(LoadingLightColor);
+            CabinetLight.SetLight(0.5f);
         }
         public async UniTask FadeInAsync()
         {
@@ -135,6 +144,7 @@ namespace MajdataPlay
             loadingText.text = string.Empty;
             loadingText.gameObject.SetActive(true);
             LedRing.SetAllLight(LoadingLightColor);
+            CabinetLight.SetLight(0.5f);
         }
         public void SetLoadingText(string text , Color color)
         {
@@ -157,6 +167,7 @@ namespace MajdataPlay
             animator.SetBool("In", true);
             await UniTask.Delay(SWITCH_ELAPSED_MS);
             LedRing.SetAllLight(LoadingLightColor);
+            CabinetLight.SetLight(0.5f);
             await SwitchSceneCoreAsync(sceneName, autoFadeOut);
         }
         async UniTask SwitchSceneCoreAsync(string sceneName, bool autoFadeOut)
@@ -170,6 +181,7 @@ namespace MajdataPlay
             {
                 animator.SetBool("In", false);
                 LedRing.SetAllLight(Color.white);
+                CabinetLight.SetLight(1.0f);
                 loadingText.gameObject.SetActive(false);
             }
         }
@@ -193,6 +205,7 @@ namespace MajdataPlay
                 throw taskToRun.Exception;
             }
             LedRing.SetAllLight(LoadingLightColor);
+            CabinetLight.SetLight(0.5f);
             await SwitchSceneCoreAsync(sceneName, true);
         }
         public async UniTaskVoid SwitchSceneAfterTaskAsync(string sceneName, Task taskToRun)
@@ -216,6 +229,7 @@ namespace MajdataPlay
                 throw taskToRun.AsTask().Exception;
             }
             LedRing.SetAllLight(LoadingLightColor);
+            CabinetLight.SetLight(0.5f);
             await SwitchSceneCoreAsync(sceneName, true);
         }
         public async UniTaskVoid SwitchSceneAfterTaskAsync(string sceneName, ValueTask taskToRun)
@@ -241,6 +255,7 @@ namespace MajdataPlay
                     throw taskToRun.AsTask().Exception;
             }            
             LedRing.SetAllLight(LoadingLightColor);
+            CabinetLight.SetLight(0.5f);
             await SwitchSceneCoreAsync(sceneName, true);
         }
         public async UniTaskVoid SwitchSceneAfterTaskAsync(string sceneName, UniTask taskToRun)
@@ -266,6 +281,7 @@ namespace MajdataPlay
                 throw taskToRun.Exception;
             }
             LedRing.SetAllLight(LoadingLightColor);
+            CabinetLight.SetLight(0.5f);
             await SwitchSceneCoreAsync(sceneName, true);
             return taskToRun.Result;
         }
@@ -290,6 +306,7 @@ namespace MajdataPlay
                 throw taskToRun.AsTask().Exception;
             }
             LedRing.SetAllLight(LoadingLightColor);
+            CabinetLight.SetLight(0.5f);
             await SwitchSceneCoreAsync(sceneName, true);
             return taskToRun.Result;
         }
@@ -316,6 +333,7 @@ namespace MajdataPlay
                     throw taskToRun.AsTask().Exception;
             }
             LedRing.SetAllLight(LoadingLightColor);
+            CabinetLight.SetLight(0.5f);
             await SwitchSceneCoreAsync(sceneName, true);
 
             return taskToRun.AsValueTask().Result;

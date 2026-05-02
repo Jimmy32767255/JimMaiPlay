@@ -1,6 +1,7 @@
 using Cysharp.Threading.Tasks;
 using MajdataPlay.Buffers;
 using MajdataPlay.Collections;
+using MajdataPlay.IO;
 using MajdataPlay.Scenes.Game;
 using MajdataPlay.Settings.Runtime;
 using MajdataPlay.Utils;
@@ -110,13 +111,20 @@ namespace MajdataPlay.Scenes.List
                 {
                     newCollections[i] = collection;
                 }
+                else if (collection is OnlineSongCollection onlineCollection)
+                {
+                    newCollections[i] = new OnlineSongCollection(onlineCollection.Source, onlineCollection.Name, onlineCollection.ToArray())
+                    {
+                        DanInfo = collection.DanInfo,
+                        Type = collection.Type,
+                    };
+                }
                 else
                 {
                     newCollections[i] = new SongCollection(collection.Name, collection.ToArray())
                     {
                         DanInfo = collection.DanInfo,
                         Type = collection.Type,
-                        Location = collection.Location,
                     };
                 }
 
@@ -455,7 +463,7 @@ namespace MajdataPlay.Scenes.List
                 var songScore = ScoreManager.GetScore(songinfo, _listConfig.SelectedDiff);
                 CoverBigDisplayer.SetMeta(songinfo.Title, songinfo.Artist, songinfo.Designers[selectedDifficulty], songinfo.Levels[selectedDifficulty]);
                 CoverBigDisplayer.SetScore(songScore);
-                ListManager.AllBackgroundTasks.Add(chartAnalyzer.AnalyzeAndDrawGraphAsync(songinfo, (ChartLevel)selectedDifficulty));
+                ListManager.AllBackgroundTasks.Add(AnalyzeAndUpdateBpmLedAsync(songinfo, (ChartLevel)selectedDifficulty));
                 FavoriteAdder.SetSong(songinfo);
                 ListManager.AllBackgroundTasks.Add(RankingDisplayer.SetSongScoreRanking(songinfo, (ChartLevel)selectedDifficulty));
                 var allocatedSongCoverDisplayer = _allocatedSongCoverDisplayer.Span;
@@ -558,7 +566,7 @@ namespace MajdataPlay.Scenes.List
                     CoverBigDisplayer.SetScore(songScore);
                     SubInfoDisplayer.RefreshContentAsync(songInfo).Forget();
                     _previewSoundPlayer.PlayPreviewSound(songInfo);
-                    ListManager.AllBackgroundTasks.Add(chartAnalyzer.AnalyzeAndDrawGraphAsync(songInfo, (ChartLevel)selectedDifficulty));
+                    ListManager.AllBackgroundTasks.Add(AnalyzeAndUpdateBpmLedAsync(songInfo, (ChartLevel)selectedDifficulty));
                     FavoriteAdder.SetSong(songInfo);
                     ListManager.AllBackgroundTasks.Add(RankingDisplayer.SetSongScoreRanking(songInfo, (ChartLevel)selectedDifficulty));
                     SetCursor(songInfo);
@@ -746,6 +754,49 @@ namespace MajdataPlay.Scenes.List
             _utageSortedCollections[pos].SetCursor(songDetail);
             _listConfig.SelectedSongIndex = SongStorage.WorkingCollection.Index;
             _listConfig.SelectedSongHash = songDetail.Hash;
+        }
+        async Task AnalyzeAndUpdateBpmLedAsync(ISongDetail songDetail, ChartLevel level)
+        {
+            await chartAnalyzer.AnalyzeAndDrawGraphAsync(songDetail, level);
+            if (!IsChartList || !ReferenceEquals(_currentCollection.Current, songDetail) || _listConfig.SelectedDiff != level)
+            {
+                return;
+            }
+
+            var bpm = chartAnalyzer.LastAnalyzeBpm;
+            if (chartAnalyzer.LastAnalyzeIsEmpty)
+            {
+                LedRing.SetButtonLight(Color.red, 3);
+                CabinetLight.SetLight(1.0f);
+                return;
+            }
+            LedRing.SetButtonLight(Color.green, 3);
+            CabinetLight.SetLight(1.0f);
+            while (IsChartList &&
+                   ReferenceEquals(_currentCollection.Current, songDetail) &&
+                   _listConfig.SelectedDiff == level &&
+                   _previewSoundPlayer.IsPreviewPending(songDetail) &&
+                   !_previewSoundPlayer.IsPreviewPlaying(songDetail))
+            {
+                await UniTask.Yield();
+            }
+            if (!IsChartList ||
+                !ReferenceEquals(_currentCollection.Current, songDetail) ||
+                _listConfig.SelectedDiff != level ||
+                !_previewSoundPlayer.IsPreviewPlaying(songDetail))
+            {
+                return;
+            }
+            if (bpm <= 0f)
+            {
+                LedRing.SetButtonLight(Color.green, 3);
+                CabinetLight.SetLight(1.0f);
+                return;
+            }
+
+            var halfNoteMs = 120000f / bpm;
+            LedRing.SetSineFunc(3, Color.green, (long)halfNoteMs);
+            CabinetLight.SetLightSineFunc(1.0f, (long)(halfNoteMs * 2));
         }
         void UpdateCurrentSongCollection()
         {

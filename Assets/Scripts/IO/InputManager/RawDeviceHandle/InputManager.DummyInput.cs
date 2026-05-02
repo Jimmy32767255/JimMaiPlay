@@ -27,6 +27,8 @@ namespace MajdataPlay.IO
         public const int TOUCH_ANGLE_SMAPLE_COUNT = 128;
         public const float FINGER_RADIUS_SEGMENT_LENGTH = 0.5f / 4;
         
+        // uint64 TouchPosData
+        //
         // Button bit (12bit)
         // 1 2 3 4 5 6 7 8 9 10 11 12
         // 0 0 0 0 0 0 0 0 0 0  0  0
@@ -35,6 +37,9 @@ namespace MajdataPlay.IO
         // 0  0  0  0  0  0  0  0  0  0  0  0  0  0  0  0  0  0  0  0  0  0  0  0  0  0  0  0  0  0  0  0  0  0
         // Version bit (16bit)
         // uint16
+        // Flag bit (2 bit)
+        // 0: ButtonRing only
+        // 1: Sensor only
         readonly static ulong* _posData = null;
         readonly static Dictionary<int, ulong> _touchRecorder = new(32);
         readonly static ReadOnlyMemory<Vector4> _unitCircle = ReadOnlyMemory<Vector4>.Empty;
@@ -146,21 +151,23 @@ namespace MajdataPlay.IO
                 }
                 var touchPosData = 0UL;
                 var touchRadius = touch.radius.magnitude;
+                _touchRecorder.TryGetValue(touch.touchId, out var lastTouchPosData);
+                var isSensorOnly = (lastTouchPosData & (1UL << 63)) != 0;
                 PositionToSensorState(sensorStates,
                     extraButton,
                     mainCamera, 
                     touch.screenPosition, 
                     touchRadius / PLATFORM_TOUCH_RADIUS_ADJUST, 
-                    ref touchPosData);
+                    ref touchPosData,
+                    ref isSensorOnly);
                 if (touchRadius > _maxTouchRadius)
                 {
                     MajDebug.LogInfo($"Touch radius: {touchRadius}");
                     _maxTouchRadius = touchRadius;
                 }
 #if UNITY_ANDROID || UNITY_IOS
-                _touchRecorder.TryGetValue(touch.touchId, out var lastTouchPosData);
 
-                if (UseOuterTouchAsSensor)
+                if (UseOuterTouchAsSensor || isSensorOnly)
                 {
                     for (var i = 0; i < 34; i++)
                     {
@@ -185,7 +192,23 @@ namespace MajdataPlay.IO
                     }
                 }
                 else
-                {
+                {                    
+                    for (var i = 0; i < 34; i++)
+                    {
+                        var lastState = (lastTouchPosData & (1UL << (i + 12))) != 0;
+                        var currentState = (touchPosData & (1UL << (i + 12))) != 0;
+                        var isClicked = !lastState && currentState;
+                        if (i < 8)
+                        {
+                            var isPreviousFrameInButton = (lastTouchPosData & (1UL << i)) != 0;
+                            isClicked = isClicked && !isPreviousFrameInButton;
+                        }
+
+                        if(isClicked)
+                        {
+                            sensorClickedCount[i]++;
+                        }
+                    }
                     for (var i = 0; i < 8; i++)
                     {
                         var lastState = (lastTouchPosData & (1UL << i)) != 0;
@@ -198,25 +221,8 @@ namespace MajdataPlay.IO
                             buttonClickedCount[i]++;
                         }
                     }
-                    for (var i = 0; i < 34; i++)
-                    {
-                        var lastState = (lastTouchPosData & (1UL << (i + 12))) != 0;
-                        var currentState = (touchPosData & (1UL << (i + 12))) != 0;
-                        var isClicked = !lastState && currentState;
-
-                        if (i < 8)
-                        {
-                            var isPreviousFrameInButton = (lastTouchPosData & (1UL << i)) != 0;
-                            isClicked = isClicked && !isPreviousFrameInButton;
-                        }
-
-                        if(isClicked)
-                        {
-                            sensorClickedCount[i]++;
-                        }
-                    }
                 }
-
+#endif
                 if (touch.ended)
                 {
                     _touchRecorder.Remove(touch.touchId);
@@ -225,7 +231,6 @@ namespace MajdataPlay.IO
                 {
                     _touchRecorder[touch.touchId] = touchPosData;
                 }
-#endif
             }
         }
 
@@ -243,12 +248,18 @@ namespace MajdataPlay.IO
                 _touchRecorder.Remove(1);
                 return;
             }
-            var touchPosData = 0UL;
-            PositionToSensorState(sensorStates, extraButton, mainCamera, mouse.position.value, 0, ref touchPosData);
-#if UNITY_ANDROID || UNITY_IOS
             _touchRecorder.TryGetValue(1, out var lastTouchPosData);
-
-            if (UseOuterTouchAsSensor)
+            var touchPosData = 0UL;
+            var isSensorOnly = (lastTouchPosData & (1UL << 63)) != 0;
+            PositionToSensorState(sensorStates, 
+                extraButton, 
+                mainCamera, 
+                mouse.position.value, 
+                0, 
+                ref touchPosData,
+                ref isSensorOnly);
+#if UNITY_ANDROID || UNITY_IOS
+            if (UseOuterTouchAsSensor || isSensorOnly)
             {
                 for (var i = 0; i < 34; i++)
                 {
@@ -274,18 +285,6 @@ namespace MajdataPlay.IO
             }
             else
             {
-                for (var i = 0; i < 8; i++)
-                {
-                    var lastState = (lastTouchPosData & (1UL << i)) != 0;
-                    var currentState = (touchPosData & (1UL << i)) != 0;
-                    var isPreviousFrameInSensor = (lastTouchPosData & (1UL << (i + 12))) != 0;
-                    var isClicked = (!lastState && currentState) && !isPreviousFrameInSensor;
-
-                    if (isClicked)
-                    {
-                        buttonClickedCount[i]++;
-                    }
-                }
                 for (var i = 0; i < 34; i++)
                 {
                     var lastState = (lastTouchPosData & (1UL << (i + 12))) != 0;
@@ -303,6 +302,18 @@ namespace MajdataPlay.IO
                         sensorClickedCount[i]++;
                     }
                 }
+                for (var i = 0; i < 8; i++)
+                {
+                    var lastState = (lastTouchPosData & (1UL << i)) != 0;
+                    var currentState = (touchPosData & (1UL << i)) != 0;
+                    var isPreviousFrameInSensor = (lastTouchPosData & (1UL << (i + 12))) != 0;
+                    var isClicked = (!lastState && currentState) && !isPreviousFrameInSensor;
+
+                    if (isClicked)
+                    {
+                        buttonClickedCount[i]++;
+                    }
+                }
             }
 
             _touchRecorder[1] = touchPosData;
@@ -313,7 +324,8 @@ namespace MajdataPlay.IO
         static void PositionToSensorState(Span<bool> sensorStates, Span<bool> buttonStates, Camera mainCamera, Vector3 position)
         {
             var _ = 0UL;
-            PositionToSensorState(sensorStates, buttonStates, mainCamera, position, 0, ref _);
+            var isSensorOnly = false;
+            PositionToSensorState(sensorStates, buttonStates, mainCamera, position, 0, ref _, ref isSensorOnly);
         }
         /// <summary>
         /// return extra button pos 0-7, if none return -1
@@ -328,7 +340,8 @@ namespace MajdataPlay.IO
             Camera mainCamera, 
             Vector3 position, 
             float touchRadius, 
-            ref ulong rawPositionData)
+            ref ulong rawPositionData,
+            ref bool isSensorOnly)
         {
             var x = (int)position.x;
             var y = (int)position.y;
@@ -340,15 +353,20 @@ namespace MajdataPlay.IO
             var newP = ((ulong)_version) << (12 + 34);
             var rayToCenter = cubeRay - new Vector3(0, 0, -10);
             var radToCenter = rayToCenter.magnitude;
-            var edgeYPosition = Mathf.Max(5.08f + (1.5f + _lastMainScreenOffset * 2.7f), 5.4f);
+            var subScreenEdge = SubScreenEdge;
+            var edgeYPosition = Mathf.Max(5.08f + (1.5f + (_lastMainScreenOffset * 2.7f)), 5.4f);
             var extraButtonStates = (stackalloc bool[12]);
             var extraSensorStates = (stackalloc bool[34]);
             var isAnyExtraButtonTriggered = false;
             var isAnyExtraSensorTriggered = false;
-            if (cubeRay.y > edgeYPosition)
+            var isInSubScreenRect = (cubeRay.x > subScreenEdge.x && cubeRay.x < subScreenEdge.z) &&
+                                    (cubeRay.y > subScreenEdge.w && cubeRay.y < subScreenEdge.y);
+            if (isInSubScreenRect)
             {
-                extraButtonStates[9] = true;
-                isAnyExtraButtonTriggered = true;
+                //P1 Select
+                // we directly set the output, not using isAnyExtraButtonTriggered..
+                buttonStates[9] |= true;
+                newP |= 1UL << 9;
             }
             if(radToCenter > _lastTouchButtonRingEdge)
             {
@@ -356,9 +374,9 @@ namespace MajdataPlay.IO
                 const float SENSOR_GROUP_D_DEG = 8f;
                 
                 // out of the screen area to the button area
-                var degree = -Mathf.Atan2(rayToCenter.y, rayToCenter.x) * Mathf.Rad2Deg + 180;
+                var degree = (-Mathf.Atan2(rayToCenter.y, rayToCenter.x) * Mathf.Rad2Deg) + 180;
                 var pos = (int)(degree / 22.5f);
-                var degDiff = degree - 22.5f * pos;
+                var degDiff = degree - (22.5f * pos);
 
                 var center = pos;
                 var left = (pos + 15) & 15;
@@ -389,327 +407,9 @@ namespace MajdataPlay.IO
                     extraButtonStates[(int)ButtonZone.A1 + index] = true;
                     isAnyExtraButtonTriggered = true;
                 }
-                //switch (pos)
-                //{
-                //    case 0: // A6 or D7 or A7
-                //        if (Mathf.Abs(degDiff) <= SENSOR_GROUP_D_DEG)
-                //        {
-                //            extraSensorStates[(int)SensorArea.D7] = true;
-                //            isAnyExtraSensorTriggered = true;
-                //        }
-                //        else
-                //        {
-                //            if (degDiff > 0)
-                //            {
-                //                extraButtonStates[(int)ButtonZone.A7] = true;
-                //            }
-                //            else
-                //            {
-                //                extraButtonStates[(int)ButtonZone.A6] = true;
-                //            }
-                //            isAnyExtraButtonTriggered = true;
-                //        }
-                //        break;
-                //    case 1: // D7 or A7 or D8
-                //        if (Mathf.Abs(degDiff) <= SENSOR_GROUP_A_DEG)
-                //        {
-                //            extraButtonStates[(int)ButtonZone.A7] = true;
-                //            isAnyExtraButtonTriggered = true;
-                //        }
-                //        else
-                //        {
-                //            if (degDiff > 0)
-                //            {
-                //                extraSensorStates[(int)SensorArea.D8] = true;
-                //            }
-                //            else
-                //            {
-                //                extraSensorStates[(int)SensorArea.D7] = true;
-                //            }
-                //            isAnyExtraSensorTriggered = true;
-                //        }
-                //        break;
-                //    case 2: // A7 or D8 or A8
-                //        if (Mathf.Abs(degDiff) <= SENSOR_GROUP_D_DEG)
-                //        {
-                //            extraSensorStates[(int)SensorArea.D8] = true;
-                //            isAnyExtraSensorTriggered = true;
-                //        }
-                //        else
-                //        {
-                //            if (degDiff > 0)
-                //            {
-                //                extraButtonStates[(int)ButtonZone.A8] = true;
-                //            }
-                //            else
-                //            {
-                //                extraButtonStates[(int)ButtonZone.A7] = true;
-                //            }
-                //            isAnyExtraButtonTriggered = true;
-                //        }
-                //        break;
-                //    case 3: // D8 or A8 or D1
-                //        if (Mathf.Abs(degDiff) <= SENSOR_GROUP_A_DEG)
-                //        {
-                //            extraButtonStates[(int)ButtonZone.A8] = true;
-                //            isAnyExtraButtonTriggered = true;
-                //        }
-                //        else
-                //        {
-                //            if (degDiff > 0)
-                //            {
-                //                extraSensorStates[(int)SensorArea.D1] = true;
-                //            }
-                //            else
-                //            {
-                //                extraSensorStates[(int)SensorArea.D8] = true;
-                //            }
-                //            isAnyExtraSensorTriggered = true;
-                //        }
-                //        break;
-                //    case 4: // A8 or D1 or A1
-                //        if (Mathf.Abs(degDiff) <= SENSOR_GROUP_D_DEG)
-                //        {
-                //            extraSensorStates[(int)SensorArea.D1] = true;
-                //            isAnyExtraSensorTriggered = true;
-                //        }
-                //        else
-                //        {
-                //            if (degDiff > 0)
-                //            {
-                //                extraButtonStates[(int)ButtonZone.A1] = true;
-                //            }
-                //            else
-                //            {
-                //                extraButtonStates[(int)ButtonZone.A8] = true;
-                //            }
-                //            isAnyExtraButtonTriggered = true;
-                //        }
-                //        break;
-
-                //    case 5: // D1 or A1 or D2
-                //        if (Mathf.Abs(degDiff) <= SENSOR_GROUP_A_DEG)
-                //        {
-                //            extraButtonStates[(int)ButtonZone.A1] = true;
-                //            isAnyExtraButtonTriggered = true;
-                //        }
-                //        else
-                //        {
-                //            if (degDiff > 0)
-                //            {
-                //                extraSensorStates[(int)SensorArea.D2] = true;
-                //            }
-                //            else
-                //            {
-                //                extraSensorStates[(int)SensorArea.D1] = true;
-                //            }
-                //            isAnyExtraSensorTriggered = true;
-                //        }
-                //        break;
-
-                //    case 6: // A1 or D2 or A2
-                //        if (Mathf.Abs(degDiff) <= SENSOR_GROUP_D_DEG)
-                //        {
-                //            extraSensorStates[(int)SensorArea.D2] = true;
-                //            isAnyExtraSensorTriggered = true;
-                //        }
-                //        else
-                //        {
-                //            if (degDiff > 0)
-                //            {
-                //                extraButtonStates[(int)ButtonZone.A2] = true;
-                //            }
-                //            else
-                //            {
-                //                extraButtonStates[(int)ButtonZone.A1] = true;
-                //            }
-                //            isAnyExtraButtonTriggered = true;
-                //        }
-                //        break;
-
-                //    case 7: // D2 or A2 or D3
-                //        if (Mathf.Abs(degDiff) <= SENSOR_GROUP_A_DEG)
-                //        {
-                //            extraButtonStates[(int)ButtonZone.A2] = true;
-                //            isAnyExtraButtonTriggered = true;
-                //        }
-                //        else
-                //        {
-                //            if (degDiff > 0)
-                //            {
-                //                extraSensorStates[(int)SensorArea.D3] = true;
-                //            }
-                //            else
-                //            {
-                //                extraSensorStates[(int)SensorArea.D2] = true;
-                //            }
-                //            isAnyExtraSensorTriggered = true;
-                //        }
-                //        break;
-
-                //    case 8: // A2 or D3 or A3
-                //        if (Mathf.Abs(degDiff) <= SENSOR_GROUP_D_DEG)
-                //        {
-                //            extraSensorStates[(int)SensorArea.D3] = true;
-                //            isAnyExtraSensorTriggered = true;
-                //        }
-                //        else
-                //        {
-                //            if (degDiff > 0)
-                //            {
-                //                extraButtonStates[(int)ButtonZone.A3] = true;
-                //            }
-                //            else
-                //            {
-                //                extraButtonStates[(int)ButtonZone.A2] = true;
-                //            }
-                //            isAnyExtraButtonTriggered = true;
-                //        }
-                //        break;
-
-                //    case 9: // D3 or A3 or D4
-                //        if (Mathf.Abs(degDiff) <= SENSOR_GROUP_A_DEG)
-                //        {
-                //            extraButtonStates[(int)ButtonZone.A3] = true;
-                //            isAnyExtraButtonTriggered = true;
-                //        }
-                //        else
-                //        {
-                //            if (degDiff > 0)
-                //            {
-                //                extraSensorStates[(int)SensorArea.D4] = true;
-                //            }
-                //            else
-                //            {
-                //                extraSensorStates[(int)SensorArea.D3] = true;
-                //            }
-                //            isAnyExtraSensorTriggered = true;
-                //        }
-                //        break;
-
-                //    case 10: // A3 or D4 or A4
-                //        if (Mathf.Abs(degDiff) <= SENSOR_GROUP_D_DEG)
-                //        {
-                //            extraSensorStates[(int)SensorArea.D4] = true;
-                //            isAnyExtraSensorTriggered = true;
-                //        }
-                //        else
-                //        {
-                //            if (degDiff > 0)
-                //            {
-                //                extraButtonStates[(int)ButtonZone.A4] = true;
-                //            }
-                //            else
-                //            {
-                //                extraButtonStates[(int)ButtonZone.A3] = true;
-                //            }
-                //            isAnyExtraButtonTriggered = true;
-                //        }
-                //        break;
-
-                //    case 11: // D4 or A4 or D5
-                //        if (Mathf.Abs(degDiff) <= SENSOR_GROUP_A_DEG)
-                //        {
-                //            extraButtonStates[(int)ButtonZone.A4] = true;
-                //            isAnyExtraButtonTriggered = true;
-                //        }
-                //        else
-                //        {
-                //            if (degDiff > 0)
-                //            {
-                //                extraSensorStates[(int)SensorArea.D5] = true;
-                //            }
-                //            else
-                //            {
-                //                extraSensorStates[(int)SensorArea.D4] = true;
-                //            }
-                //            isAnyExtraSensorTriggered = true;
-                //        }
-                //        break;
-
-                //    case 12: // A4 or D5 or A5
-                //        if (Mathf.Abs(degDiff) <= SENSOR_GROUP_D_DEG)
-                //        {
-                //            extraSensorStates[(int)SensorArea.D5] = true;
-                //            isAnyExtraSensorTriggered = true;
-                //        }
-                //        else
-                //        {
-                //            if (degDiff > 0)
-                //            {
-                //                extraButtonStates[(int)ButtonZone.A5] = true;
-                //            }
-                //            else
-                //            {
-                //                extraButtonStates[(int)ButtonZone.A4] = true;
-                //            }
-                //            isAnyExtraButtonTriggered = true;
-                //        }
-                //        break;
-
-                //    case 13: // D5 or A5 or D6
-                //        if (Mathf.Abs(degDiff) <= SENSOR_GROUP_A_DEG)
-                //        {
-                //            extraButtonStates[(int)ButtonZone.A5] = true;
-                //            isAnyExtraButtonTriggered = true;
-                //        }
-                //        else
-                //        {
-                //            if (degDiff > 0)
-                //            {
-                //                extraSensorStates[(int)SensorArea.D6] = true;
-                //            }
-                //            else
-                //            {
-                //                extraSensorStates[(int)SensorArea.D5] = true;
-                //            }
-                //            isAnyExtraSensorTriggered = true;
-                //        }
-                //        break;
-
-                //    case 14: // A5 or D6 or A6
-                //        if (Mathf.Abs(degDiff) <= SENSOR_GROUP_D_DEG)
-                //        {
-                //            extraSensorStates[(int)SensorArea.D6] = true;
-                //            isAnyExtraSensorTriggered = true;
-                //        }
-                //        else
-                //        {
-                //            if (degDiff > 0)
-                //            {
-                //                extraButtonStates[(int)ButtonZone.A6] = true;
-                //            }
-                //            else
-                //            {
-                //                extraButtonStates[(int)ButtonZone.A5] = true;
-                //            }
-                //            isAnyExtraButtonTriggered = true;
-                //        }
-                //        break;
-
-                //    case 15: // D6 or A6 or D7
-                //        if (Mathf.Abs(degDiff) <= SENSOR_GROUP_A_DEG)
-                //        {
-                //            extraButtonStates[(int)ButtonZone.A6] = true;
-                //            isAnyExtraButtonTriggered = true;
-                //        }
-                //        else
-                //        {
-                //            if (degDiff > 0)
-                //            {
-                //                extraSensorStates[(int)SensorArea.D7] = true;
-                //            }
-                //            else
-                //            {
-                //                extraSensorStates[(int)SensorArea.D6] = true;
-                //            }
-                //            isAnyExtraSensorTriggered = true;
-                //        }
-                //        break;
-                //}
             }
             var circleSamples = _unitCircle.Span;
-            var userRad = _lastFingerRadius * (1 + touchRadius * _lastTouchRadiusAdjust);
+            var userRad = _lastFingerRadius * (1 + (touchRadius * _lastTouchRadiusAdjust));
             var a_extraRad = _lastAAreaExtraRadius;
             var b_extraRad = _lastBAreaExtraRadius;
             var c_extraRad = _lastCAreaExtraRadius;
@@ -731,13 +431,18 @@ namespace MajdataPlay.IO
                     circleSamplesPtr,
                     ref newP);
             }
-
             for (var i = 0; i < 34; i++)
             {
-                sensorStates[i] |= (newP & (1UL << (i + 12))) != 0;
+                var result = (newP & (1UL << (i + 12))) != 0;
+                sensorStates[i] |= result;
+                isSensorOnly |= result;
+            }
+            if(isSensorOnly)
+            {
+                newP |= (1UL << 63);
             }
 
-            if (UseOuterTouchAsSensor)
+            if (UseOuterTouchAsSensor || isSensorOnly)
             {
                 for (var i = 0; i < 8; i++)
                 {
@@ -767,10 +472,9 @@ namespace MajdataPlay.IO
                     }
                 }
             }
-            else
+            // is using outer touch as buttons or not in game
+            if ((!UseOuterTouchAsSensor || _lastTouchButtonRingEdge != 5.4f) && isAnyExtraButtonTriggered )
             {
-                if(isAnyExtraButtonTriggered)
-                {
                     newP = 0UL;
                     sensorStates.Clear();
                     for (var i = 0; i < extraButtonStates.Length; i++)
@@ -782,7 +486,6 @@ namespace MajdataPlay.IO
                             newP |= 1UL << i;
                         }
                     }
-                }
             }
             rawPositionData = newP;
         }

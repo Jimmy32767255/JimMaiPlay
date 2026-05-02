@@ -1,9 +1,6 @@
 using UnityEngine;
-using UnityEngine.UI;
 using TMPro;
 using MajdataPlay.IO;
-using UnityEngine.EventSystems;
-using MajdataPlay.Utils;
 using MajdataPlay.Editor;
 
 namespace MajdataPlay.Scenes.SortFind
@@ -14,14 +11,14 @@ namespace MajdataPlay.Scenes.SortFind
         [SerializeField]
         TextMeshProUGUI _slotText;
         [SerializeField]
-        InputField _searchBar;
+        TMP_InputField _searchBar;
+        [SerializeField]
+        GameObject _clearButton;
 
         [SerializeField]
         Color _selectedColor;
         [SerializeField, ReadOnlyField]
         SortType _sortType;
-
-        EventSystem _eventSystem;
 
         bool _isExited = false;
         int _selectIndex = (int)SortType.Default;
@@ -44,10 +41,12 @@ namespace MajdataPlay.Scenes.SortFind
             {
                 _slots[i] = (SortType)i;
             }
-            _eventSystem = EventSystem.current;
-            _eventSystem.SetSelectedGameObject(_searchBar.gameObject);
+            Focus(_searchBar);
             LedRing.SetAllLight(Color.black);
             _searchBar.text = SongStorage.OrderBy.Keyword;
+            _searchBar.onValueChanged.AddListener(_ => _clearButton.SetActive(!string.IsNullOrEmpty(_searchBar.text)));
+            _clearButton.SetActive(!string.IsNullOrEmpty(_searchBar.text));
+            _searchBar.onSubmit.AddListener(_ => SortAndExit());
             _selectIndex = (int)SongStorage.OrderBy.SortBy;
             SetActiveSort((SortType)_selectIndex);
         }
@@ -87,8 +86,15 @@ namespace MajdataPlay.Scenes.SortFind
                      InputManager.IsSensorClickedInThisFrame(SensorArea.C) ||
                      InputManager.IsSensorClickedInThisFrame(SensorArea.B2))
             {
-                _eventSystem.SetSelectedGameObject(_searchBar.gameObject);
+                Focus(_searchBar);
             }
+        }
+
+        static void Focus(TMP_InputField inputField)
+        {
+            inputField.Select();
+            inputField.ActivateInputField();
+            inputField.MoveTextEnd(false);
         }
 
         void SetActiveSort(SortType sortType)

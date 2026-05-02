@@ -18,8 +18,6 @@ using UnityEngine.Profiling;
 #nullable enable
 namespace MajdataPlay.Scenes.Game.Notes.Behaviours
 {
-    using static UnityEngine.Rendering.DebugUI;
-    using Unsafe = System.Runtime.CompilerServices.Unsafe;
     internal sealed class WifiDrop : SlideBase, IMajComponent
     {
 
@@ -442,7 +440,8 @@ namespace MajdataPlay.Scenes.Game.Notes.Behaviours
                         }
                         break;
                     case NoteStatus.Running:
-                        if (GetRemainingTimeWithoutOffset() == 0)
+                        var remaingTimeWithoutOffset = GetRemainingTimeWithoutOffset();
+                        if (remaingTimeWithoutOffset == 0)
                         {
                             for (var i = 0; i < stars.Length; i++)
                             {
@@ -452,15 +451,14 @@ namespace MajdataPlay.Scenes.Game.Notes.Behaviours
                             State = NoteStatus.Arrived;
                             goto case NoteStatus.Arrived;
                         }
-                        var process = ((Length - GetRemainingTimeWithoutOffset()) / Length).Clamp(0, 1);
+                        var process = (Length - remaingTimeWithoutOffset) / Length;
 
                         for (var i = 0; i < stars.Length; i++)
                         {
                             var starTransform = starTransforms[i];
-                            var a = _starEndPositions[i];
-                            var b = _starStartPositions[i];
-                            var ba = a - b;
-                            var newPos = ba * process + b;
+                            var a = _starStartPositions[i];
+                            var b = _starEndPositions[i];
+                            var newPos = Vector3.Lerp(a, b, process);
 
                             starTransform.position = newPos; //TODO add some runhua
                         }

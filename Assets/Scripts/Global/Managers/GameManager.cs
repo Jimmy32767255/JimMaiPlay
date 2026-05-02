@@ -9,9 +9,12 @@ using MajdataPlay.Timer;
 using ShimSkiaSharp;
 #if UNITY_STANDALONE_WIN
 using MajdataPlay.Platform.Win32;
+#elif UNITY_STANDALONE_OSX
+using MajdataPlay.Platform.MacOS;
 #elif UNITY_IOS
 using MajdataPlay.Platform.iOS;
 #elif UNITY_ANDROID
+using MajdataPlay.Platform.Android;
 using MajdataPlay.Platform.Android.Runtime;
 #endif
 using System;
@@ -138,6 +141,7 @@ namespace MajdataPlay
             MajEnv.Init();
 #if !UNITY_EDITOR
 #if UNITY_ANDROID
+            AndroidKeyboard.Init();
             var intent = CurrentActivity.Call<AndroidJavaObject>("getIntent");
             ChartImporter.Android_OnNewIntent(this, intent);
             OnNewIntent += ChartImporter.Android_OnNewIntent;
@@ -153,8 +157,17 @@ namespace MajdataPlay
                 MoveCharts();
                 MoveSkins();
             }
+            else
+            {
+                SyncMissingAssets();
+                RestoreManagedAssetsIfMissing();
+            }
+#elif UNITY_STANDALONE_WIN && !UNITY_EDITOR
+            RestoreManagedAssetsIfMissing();
 #endif
-
+#if UNITY_STANDALONE
+            DiscordManager.Init();
+#endif
             MajInstances.FPSDisplayer.Init();
             MajInstances.AudioManager.Init();
             Localization.Init();
@@ -197,6 +210,12 @@ namespace MajdataPlay
 #endif
 
             ApplyScreenConfig();
+#if UNITY_STANDALONE_OSX && !UNITY_EDITOR
+            if (Settings.Debug.FullScreen && MajEnv.Mode != RunningMode.View)
+            {
+                await ApplyMacOSFullscreenAsync();
+            }
+#endif
 
             var availableLangs = Localization.Available;
             if (!availableLangs.IsEmpty())
@@ -340,15 +359,26 @@ namespace MajdataPlay
 
         public void ApplyScreenConfig()
         {
-#if UNITY_STANDALONE_WIN
+#if UNITY_STANDALONE_WIN || UNITY_STANDALONE_OSX
             if (MajEnv.Mode != RunningMode.View)
             {
                 var fullScreen = Settings.Debug.FullScreen;
+#if UNITY_STANDALONE_OSX
+                Screen.fullScreen = fullScreen;
+                Screen.fullScreenMode = fullScreen
+                    ? FullScreenMode.FullScreenWindow
+                    : FullScreenMode.Windowed;
+#else
                 Screen.fullScreen = fullScreen;
                 Screen.fullScreenMode = FullScreenMode.ExclusiveFullScreen;
+#endif
 
                 var resolution = Settings.Display.Resolution.ToLower();
+#if UNITY_STANDALONE_OSX
+                if (!fullScreen && resolution is not "auto")
+#else
                 if (resolution is not "auto")
+#endif
                 {
                     var param = resolution.Split("x");
                     int width, height;
@@ -367,6 +397,14 @@ namespace MajdataPlay
 #endif
             Application.targetFrameRate = Settings.Display.FPSLimit;
         }
+
+#if UNITY_STANDALONE_OSX && !UNITY_EDITOR
+        async UniTask ApplyMacOSFullscreenAsync()
+        {
+            await UniTask.Yield(PlayerLoopTiming.LastPostLateUpdate);
+            NativePresentation.EnterNativeFullscreenIfNeeded();
+        }
+#endif
 
         void Update()
         {
@@ -498,18 +536,37 @@ namespace MajdataPlay
 #endregion
         
         #region Asset Extraction
+        private static string[] GetStreamingAssetRelativePaths(bool ignoreRootManagedAssets)
+        {
+            var paths = Resources.Load<TextAsset>("StreamingAssetPaths");
+            if (paths == null)
+            {
+                MajDebug.LogError("StreamingAssetPaths not found in Resources.");
+                return Array.Empty<string>();
+            }
+
+            return paths.text
+                        .Replace("\\", "/")
+                        .Split('\n')
+                        .Select(x => x.Trim())
+                        .Where(x => x.Length != 0)
+                        .Where(x => !ignoreRootManagedAssets ||
+                                    (!x.StartsWith("MaiCharts/", StringComparison.OrdinalIgnoreCase) &&
+                                     !x.StartsWith("Skins/", StringComparison.OrdinalIgnoreCase)))
+                        .ToArray();
+        }
         private static void ExtractAssets()
         {
+            var relativePaths = GetStreamingAssetRelativePaths(ignoreRootManagedAssets: false);
+            if (relativePaths.Length == 0)
+            {
+                return;
+            }
 #if UNITY_IOS
             var extractRoot = Path.Combine(MajEnv.RootPath, "ExtStreamingAssets/");
             Directory.CreateDirectory(extractRoot);
-            var paths = Resources.Load<TextAsset>("StreamingAssetPaths");
-            var fs = paths.text;
-            MajDebug.LogInfo(fs);
-            string[] fLines = fs.Replace("\\", "/").Split("\n");
-            foreach (var rawLine in fLines)
+            foreach (var line in relativePaths)
             {
-                var line = rawLine.Trim();
                 var srcPath = Path.Combine(Application.streamingAssetsPath, line);
                 var dstPath = Path.Combine(extractRoot, line);
                 var dstDir = Path.GetDirectoryName(dstPath);
@@ -535,25 +592,8 @@ namespace MajdataPlay
 #elif UNITY_ANDROID
             var extractRoot = Path.Combine(MajEnv.RootPath, "ExtStreamingAssets");
             Directory.CreateDirectory(extractRoot);
-
-            var paths = Resources.Load<TextAsset>("StreamingAssetPaths");
-            if (paths == null)
+            foreach (var line in relativePaths)
             {
-                MajDebug.LogError("StreamingAssetPaths not found in Resources.");
-                return;
-            }
-
-            var fs = paths.text;
-            MajDebug.LogInfo(fs);
-
-            string[] fLines = fs.Replace("\\", "/").Split('\n');
-
-            foreach (var rawLine in fLines)
-            {
-                var line = rawLine.Trim();
-                if (line.Length == 0)
-                    continue;
-
                 var srcUrl = Path.Combine(Application.streamingAssetsPath, line).Replace("\\", "/");
 
                 var dstPath = Path.Combine(extractRoot, line);
@@ -591,6 +631,229 @@ namespace MajdataPlay
                 catch (Exception e)
                 {
                     MajDebug.LogError($"Extract failed(Android): {line}\nsrc={srcUrl}\n{e}");
+                }
+            }
+#endif
+        }
+        private static void SyncMissingAssets()
+        {
+            var relativePaths = GetStreamingAssetRelativePaths(ignoreRootManagedAssets: true);
+            if (relativePaths.Length == 0)
+            {
+                return;
+            }
+#if UNITY_IOS
+            var extractRoot = Path.Combine(MajEnv.RootPath, "ExtStreamingAssets/");
+            Directory.CreateDirectory(extractRoot);
+            foreach (var line in relativePaths)
+            {
+                var dstPath = Path.Combine(extractRoot, line);
+                if (File.Exists(dstPath))
+                {
+                    continue;
+                }
+
+                var srcPath = Path.Combine(Application.streamingAssetsPath, line);
+                var dstDir = Path.GetDirectoryName(dstPath);
+                if (!string.IsNullOrEmpty(dstDir)) Directory.CreateDirectory(dstDir);
+                MajDebug.LogInfo($"Sync missing(iOS): {srcPath} -> {dstPath}");
+
+                try
+                {
+                    var data = File.ReadAllBytes(srcPath);
+                    if (data.Length == 0)
+                    {
+                        MajDebug.LogError($"Sync missing failed(iOS): empty data: {line}\nsrc={srcPath}");
+                        continue;
+                    }
+
+                    File.WriteAllBytes(dstPath, data);
+                }
+                catch (Exception e)
+                {
+                    MajDebug.LogError($"Sync missing failed(iOS): {line}\nsrc={srcPath}\n{e}");
+                }
+            }
+#elif UNITY_ANDROID
+            var extractRoot = Path.Combine(MajEnv.RootPath, "ExtStreamingAssets");
+            Directory.CreateDirectory(extractRoot);
+            foreach (var line in relativePaths)
+            {
+                var dstPath = Path.Combine(extractRoot, line);
+                if (File.Exists(dstPath))
+                {
+                    continue;
+                }
+
+                var srcUrl = Path.Combine(Application.streamingAssetsPath, line).Replace("\\", "/");
+                var dstDir = Path.GetDirectoryName(dstPath);
+                if (!string.IsNullOrEmpty(dstDir))
+                    Directory.CreateDirectory(dstDir);
+
+                MajDebug.LogInfo($"Sync missing(Android): {srcUrl} -> {dstPath}");
+
+                try
+                {
+                    using var req = UnityWebRequest.Get(srcUrl);
+                    req.downloadHandler = new DownloadHandlerBuffer();
+                    var op = req.SendWebRequest();
+                    while (!op.isDone)
+                    {
+                        System.Threading.Thread.Sleep(1);
+                    }
+
+                    if (req.result != UnityWebRequest.Result.Success)
+                    {
+                        MajDebug.LogError($"Sync missing failed(Android): {line}\nsrc={srcUrl}\nerr={req.error}");
+                        continue;
+                    }
+
+                    var data = req.downloadHandler.data;
+                    if (data == null || data.Length == 0)
+                    {
+                        MajDebug.LogError($"Sync missing failed(Android): empty data: {line}\nsrc={srcUrl}");
+                        continue;
+                    }
+
+                    File.WriteAllBytes(dstPath, data);
+                }
+                catch (Exception e)
+                {
+                    MajDebug.LogError($"Sync missing failed(Android): {line}\nsrc={srcUrl}\n{e}");
+                }
+            }
+#endif
+        }
+        private static void RestoreManagedAssetsIfMissing()
+        {
+            var chartRootMissing = !Directory.EnumerateFileSystemEntries(MajEnv.ChartPath).Any();
+            var skinRootMissing = !Directory.EnumerateFileSystemEntries(MajEnv.SkinPath).Any();
+            if (!chartRootMissing && !skinRootMissing)
+            {
+                return;
+            }
+
+            var relativePaths = GetStreamingAssetRelativePaths(ignoreRootManagedAssets: false);
+            if (relativePaths.Length == 0)
+            {
+                return;
+            }
+
+            if (chartRootMissing)
+            {
+                RestoreManagedAssetGroup("MaiCharts/", MajEnv.ChartPath, relativePaths);
+            }
+
+            if (skinRootMissing)
+            {
+                RestoreManagedAssetGroup("Skins/", MajEnv.SkinPath, relativePaths);
+            }
+        }
+        private static void RestoreManagedAssetGroup(string sourcePrefix, string destinationRoot, IReadOnlyList<string> relativePaths)
+        {
+            var targetPaths = relativePaths.Where(x => x.StartsWith(sourcePrefix, StringComparison.OrdinalIgnoreCase))
+                                           .ToArray();
+            if (targetPaths.Length == 0)
+            {
+                return;
+            }
+
+            Directory.CreateDirectory(destinationRoot);
+
+#if UNITY_IOS
+            foreach (var line in targetPaths)
+            {
+                var relativePath = line.Substring(sourcePrefix.Length);
+                var srcPath = Path.Combine(Application.streamingAssetsPath, line);
+                var dstPath = Path.Combine(destinationRoot, relativePath);
+                var dstDir = Path.GetDirectoryName(dstPath);
+                if (!string.IsNullOrEmpty(dstDir)) Directory.CreateDirectory(dstDir);
+                MajDebug.LogInfo($"Restore managed asset(iOS): {srcPath} -> {dstPath}");
+
+                try
+                {
+                    var data = File.ReadAllBytes(srcPath);
+                    if (data.Length == 0)
+                    {
+                        MajDebug.LogError($"Restore managed asset failed(iOS): empty data: {line}\nsrc={srcPath}");
+                        continue;
+                    }
+
+                    File.WriteAllBytes(dstPath, data);
+                }
+                catch (Exception e)
+                {
+                    MajDebug.LogError($"Restore managed asset failed(iOS): {line}\nsrc={srcPath}\n{e}");
+                }
+            }
+#elif UNITY_ANDROID
+            foreach (var line in targetPaths)
+            {
+                var relativePath = line.Substring(sourcePrefix.Length);
+                var srcUrl = Path.Combine(Application.streamingAssetsPath, line).Replace("\\", "/");
+                var dstPath = Path.Combine(destinationRoot, relativePath);
+                var dstDir = Path.GetDirectoryName(dstPath);
+                if (!string.IsNullOrEmpty(dstDir))
+                    Directory.CreateDirectory(dstDir);
+
+                MajDebug.LogInfo($"Restore managed asset(Android): {srcUrl} -> {dstPath}");
+
+                try
+                {
+                    using var req = UnityWebRequest.Get(srcUrl);
+                    req.downloadHandler = new DownloadHandlerBuffer();
+                    var op = req.SendWebRequest();
+                    while (!op.isDone)
+                    {
+                        System.Threading.Thread.Sleep(1);
+                    }
+
+                    if (req.result != UnityWebRequest.Result.Success)
+                    {
+                        MajDebug.LogError($"Restore managed asset failed(Android): {line}\nsrc={srcUrl}\nerr={req.error}");
+                        continue;
+                    }
+
+                    var data = req.downloadHandler.data;
+                    if (data == null || data.Length == 0)
+                    {
+                        MajDebug.LogError($"Restore managed asset failed(Android): empty data: {line}\nsrc={srcUrl}");
+                        continue;
+                    }
+
+                    File.WriteAllBytes(dstPath, data);
+                }
+                catch (Exception e)
+                {
+                    MajDebug.LogError($"Restore managed asset failed(Android): {line}\nsrc={srcUrl}\n{e}");
+                }
+            }
+#elif UNITY_STANDALONE_WIN
+            foreach (var line in targetPaths)
+            {
+                var relativePath = line.Substring(sourcePrefix.Length);
+                var srcPath = Path.Combine(Application.streamingAssetsPath, line);
+                var dstPath = Path.Combine(destinationRoot, relativePath);
+                var dstDir = Path.GetDirectoryName(dstPath);
+                if (!string.IsNullOrEmpty(dstDir))
+                    Directory.CreateDirectory(dstDir);
+
+                MajDebug.LogInfo($"Restore managed asset(Windows): {srcPath} -> {dstPath}");
+
+                try
+                {
+                    var data = File.ReadAllBytes(srcPath);
+                    if (data.Length == 0)
+                    {
+                        MajDebug.LogError($"Restore managed asset failed(Windows): empty data: {line}\nsrc={srcPath}");
+                        continue;
+                    }
+
+                    File.WriteAllBytes(dstPath, data);
+                }
+                catch (Exception e)
+                {
+                    MajDebug.LogError($"Restore managed asset failed(Windows): {line}\nsrc={srcPath}\n{e}");
                 }
             }
 #endif

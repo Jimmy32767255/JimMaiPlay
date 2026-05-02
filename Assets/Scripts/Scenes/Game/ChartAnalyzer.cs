@@ -4,7 +4,7 @@ using MajdataPlay.Buffers;
 using MajdataPlay.Drawing;
 using MajdataPlay.Utils;
 using MajSimai;
-using NeoSmart.AsyncLock;
+using Nito.AsyncEx;
 using SkiaSharp;
 using System;
 using System.Buffers;
@@ -33,6 +33,8 @@ namespace MajdataPlay.Scenes.Game
         static UnityEngine.Color _colorC;
 
         public Text? anaText;
+        public float LastAnalyzeBpm { get; private set; } = 0f;
+        public bool LastAnalyzeIsEmpty { get; private set; }
 
         [SerializeField]
         GameObject? _iconPrefab;
@@ -111,12 +113,15 @@ namespace MajdataPlay.Scenes.Game
                         {
                             await UniTask.SwitchToMainThread(token);
                             SetLoading();
+                            LastAnalyzeIsEmpty = false;
                             await UniTask.SwitchToThreadPool();
                             var simaiFile = await songDetail.GetMaidataAsync(token: token);
                             var maiChart = simaiFile.Charts[(int)level];
                             if (maiChart.IsEmpty)
                             {
                                 await UniTask.SwitchToMainThread(token);
+                                LastAnalyzeBpm = 0f;
+                                LastAnalyzeIsEmpty = true;
                                 SetHelp();
                                 return;
                             }
@@ -150,6 +155,8 @@ namespace MajdataPlay.Scenes.Game
                                 _cachedMaiCharts.Add(maiChart);
                             }
                             SetTexture(result.LineGraph);
+                            LastAnalyzeBpm = GetFirstBpm(maiChart);
+                            LastAnalyzeIsEmpty = false;
                             if (anaText is not null)
                             {
                                 var max = result.PeakDensity;
@@ -187,6 +194,8 @@ namespace MajdataPlay.Scenes.Game
                                 MajDebug.LogException(ex);
                             }
                             await UniTask.SwitchToMainThread(token);
+                            LastAnalyzeBpm = 0f;
+                            LastAnalyzeIsEmpty = false;
                             SetError();
                             //_rawImage.texture = new Texture2D(0, 0);
                             if (anaText is not null)
@@ -204,9 +213,12 @@ namespace MajdataPlay.Scenes.Game
             {
                 await UniTask.SwitchToMainThread();
                 SetLoading();
+                LastAnalyzeIsEmpty = false;
                 if (data.IsEmpty)
                 {
                     await UniTask.SwitchToMainThread();
+                    LastAnalyzeBpm = 0f;
+                    LastAnalyzeIsEmpty = true;
                     SetHelp();
                     return;
                 }
@@ -215,6 +227,8 @@ namespace MajdataPlay.Scenes.Game
                 await UniTask.SwitchToMainThread();
                 token.ThrowIfCancellationRequested();
                 _rawImage.texture = result.LineGraph;
+                LastAnalyzeBpm = GetFirstBpm(data);
+                LastAnalyzeIsEmpty = false;
                 if (anaText is not null)
                 {
                     var max = result.PeakDensity;
@@ -249,6 +263,8 @@ namespace MajdataPlay.Scenes.Game
             {
                 MajDebug.LogException(ex);
                 await UniTask.SwitchToMainThread();
+                LastAnalyzeBpm = 0f;
+                LastAnalyzeIsEmpty = false;
                 SetError();
                 _rawImage.texture = _emptyTexture!;
                 if (anaText is not null)
@@ -307,6 +323,11 @@ namespace MajdataPlay.Scenes.Game
             var esti = 0f;
             using var noteTimings = new RentedList<SimaiTimingPoint>();
             noteTimings.AddRange(data.NoteTimings);
+            if (noteTimings.Count > 0)
+            {
+                maxBPM = noteTimings.Max(o => o.Bpm);
+                minBPM = noteTimings.Min(o => o.Bpm);
+            }
             for (float time = 0; time < totalLength; time += 0.5f)
             {
                 token.ThrowIfCancellationRequested();
@@ -341,8 +362,6 @@ namespace MajdataPlay.Scenes.Game
                 tapPoints.Add(new Vector2(x, y0));
                 slidePoints.Add(new Vector2(x, y1));
                 touchPoints.Add(new Vector2(x, y2));
-                maxBPM = noteTimings.Max(o => o.Bpm);
-                minBPM = noteTimings.Min(o => o.Bpm);
             }
 
 
@@ -370,6 +389,10 @@ namespace MajdataPlay.Scenes.Game
                 LineGraph = tex
             };
             return result;
+        }
+        static float GetFirstBpm(SimaiChart data)
+        {
+            return data.NoteTimings.IsEmpty ? 0f : data.NoteTimings[0].Bpm;
         }
         static async ValueTask<Texture> DrawGraphAsync(List<Vector2> tapPoints, 
             List<Vector2> slidePoints, 

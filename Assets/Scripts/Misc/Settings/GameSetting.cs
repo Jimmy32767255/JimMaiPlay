@@ -49,12 +49,18 @@ namespace MajdataPlay.Settings
         public bool StarRotation { get; set; } = true;
         
         public BGInfoOption BGInfo { get; set; } = BGInfoOption.Combo;
+        public BGInfoOption SecondaryBGInfo { get; set; } = BGInfoOption.None;
+        public BGInfoOption SubScreenBGInfo { get; set; } = BGInfoOption.Achievement;
         
         public TopInfoDisplayOption TopInfo { get; set; } = TopInfoDisplayOption.None;
         
         public bool TrackSkip { get; set; } = true;
+
+        public AutoTrackSkipOption AutoTrackSkip { get; set; } = AutoTrackSkipOption.Disabled;
         
         public bool FastRetry { get; set; } = true;
+        
+        public AutoQuickRetryOption AutoQuickRetry { get; set; } = AutoQuickRetryOption.Disabled;
         
         public MirrorOption Mirror { get; set; } = MirrorOption.Off;
         
@@ -97,7 +103,7 @@ namespace MajdataPlay.Settings
     {
         
         [OptionEnumerator(typeof(LanguageEnumerator))]
-        public string Language { get; set; } = "zh-CN - Majdata";
+        public string Language { get; set; } = "";
         
         [OptionEnumerator(typeof(SkinEnumerator))]
         public string Skin { get; set; } = "default";
@@ -181,7 +187,8 @@ namespace MajdataPlay.Settings
         
         [Step("0.01")]
         public float SubDisplayScale { get; set; } = 1f;
-        
+        public GameplayScreenRotationAngleOption GameplayScreenRotationAngle { get; set; } = GameplayScreenRotationAngleOption.Zero;
+
         [OptionEnumerator(typeof(EngineEnumSettingEnumerator))]
         public RenderQualityOption RenderQuality { get; set; } = RenderQualityOption.Low;
 #if UNITY_STANDALONE
@@ -238,11 +245,6 @@ namespace MajdataPlay.Settings
         [Step("0.05")]
         [Range("0", "1", HasMax = true, HasMin = true)]
         [OptionEnumerator(typeof(AudioVolumeEnumerator))]
-        public float Answer { get; set; } = 0.8f;
-        
-        [Step("0.05")]
-        [Range("0", "1", HasMax = true, HasMin = true)]
-        [OptionEnumerator(typeof(AudioVolumeEnumerator))]
         public float BGM { get; set; } = 1f;
         
         [Step("0.05")]
@@ -253,12 +255,17 @@ namespace MajdataPlay.Settings
         [Step("0.05")]
         [Range("0", "1", HasMax = true, HasMin = true)]
         [OptionEnumerator(typeof(AudioVolumeEnumerator))]
-        public float Tap { get; set; } = 0.3f;
+        public float Answer { get; set; } = 0.8f;
         
         [Step("0.05")]
         [Range("0", "1", HasMax = true, HasMin = true)]
         [OptionEnumerator(typeof(AudioVolumeEnumerator))]
-        public float Slide { get; set; } = 0.3f;
+        public float Tap { get; set; } = 0.3f;
+
+        [Step("0.05")]
+        [Range("0", "1", HasMax = true, HasMin = true)]
+        [OptionEnumerator(typeof(AudioVolumeEnumerator))]
+        public float Ex { get; set; } = 0.3f;
         
         [Step("0.05")]
         [Range("0", "1", HasMax = true, HasMin = true)]
@@ -268,7 +275,17 @@ namespace MajdataPlay.Settings
         [Step("0.05")]
         [Range("0", "1", HasMax = true, HasMin = true)]
         [OptionEnumerator(typeof(AudioVolumeEnumerator))]
+        public float Slide { get; set; } = 0.3f;
+        
+        [Step("0.05")]
+        [Range("0", "1", HasMax = true, HasMin = true)]
+        [OptionEnumerator(typeof(AudioVolumeEnumerator))]
         public float Touch { get; set; } = 0.3f;
+
+        [Step("0.05")]
+        [Range("0", "1", HasMax = true, HasMin = true)]
+        [OptionEnumerator(typeof(AudioVolumeEnumerator))]
+        public float Hanabi { get; set; } = 0.3f;
         
         [Step("0.05")]
         [Range("0", "1", HasMax = true, HasMin = true)]
@@ -488,9 +505,7 @@ namespace MajdataPlay.Settings
         
         public TouchPanelOptions TouchPanel { get; set; } = new();
 #else
-        
-        public bool EnableKeyboardInput { get; set; } = false;
-        public bool EnableGamepadInput { get; set; } = false;
+        public MobileExternalButtonRingOption ExternalButtonRing { get; init; } = MobileExternalButtonRingOption.None;
 #endif
     }
 #if UNITY_STANDALONE
@@ -508,7 +523,7 @@ namespace MajdataPlay.Settings
         
         public float Brightness { get; set; } = 1.0f;
         
-        public int RefreshRateMs { get; set; } = 100;
+        public int RefreshRateMs { get; set; } = 16;
         
         public bool Throttler { get; set; } = false;
         

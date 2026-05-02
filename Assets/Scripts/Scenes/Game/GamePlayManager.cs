@@ -85,6 +85,7 @@ namespace MajdataPlay.Scenes.Game
 
         public GameObject AllPerfectAnimation;
         public GameObject FullComboAnimation;
+        public GameObject TrackSkipAnimation;
 
 
         [SerializeField]
@@ -99,6 +100,8 @@ namespace MajdataPlay.Scenes.Game
         GameObject _skipBtn;
         [SerializeField]
         SpriteMask _noteMask;
+        [SerializeField]
+        RectTransform _mainDisplayer;
         [ReadOnlyField]
         [SerializeField]
         float _thisFrameSec = 0f;
@@ -114,6 +117,8 @@ namespace MajdataPlay.Scenes.Game
         int _chartRotation = 0;
 
         bool _isTrackSkipAvailable = MajEnv.Settings?.Game.TrackSkip ?? false;
+        AutoTrackSkipOption _autoTrackSkipOption = MajEnv.Settings?.Game.AutoTrackSkip ?? AutoTrackSkipOption.Disabled;
+        AutoQuickRetryOption _autoQuickRetryOption = MajEnv.Settings?.Game.AutoQuickRetry ?? AutoQuickRetryOption.Disabled;
         bool _isFastRetryAvailable = MajEnv.Settings?.Game.FastRetry ?? false;
         float? _allNotesFinishedTiming = null;
         float _2367PressTime = 0;
@@ -148,6 +153,8 @@ namespace MajdataPlay.Scenes.Game
 
         float _trackVolume = 1f;
 
+        GameplayScreenRotationAngleOption _screenRotationAngle = GameplayScreenRotationAngleOption.Zero;
+
         AudioSampleWrap? _audioSample = null;
 
         BGManager _bgManager;
@@ -179,6 +186,7 @@ namespace MajdataPlay.Scenes.Game
                 throw new ArgumentNullException(nameof(_gameInfo));
             }
             //print(MajInstances.GameManager.SelectedIndex);
+            _screenRotationAngle = _setting.Display.GameplayScreenRotationAngle;
             _songDetail = _gameInfo.Current;
             HistoryScore = ScoreManager.GetScore(_songDetail, _listConfig.SelectedDiff);
             _timer = MajTimeline.CreateTimer();
@@ -194,6 +202,18 @@ namespace MajdataPlay.Scenes.Game
                 _audioTimeOffsetSec = _setting.Judge.AudioOffset * MajEnv.FRAME_LENGTH_SEC;
                 _audioTimeOffsetSec += _chartSetting.AudioOffset * MajEnv.FRAME_LENGTH_SEC;
                 _displayOffsetSec = _setting.Debug.DisplayOffset * MajEnv.FRAME_LENGTH_SEC;
+            }
+            switch(_screenRotationAngle)
+            {
+                case GameplayScreenRotationAngleOption._90:
+                    _mainDisplayer.rotation = Quaternion.Euler(0, 0, -90);
+                    break;
+                case GameplayScreenRotationAngleOption._180:
+                    _mainDisplayer.rotation = Quaternion.Euler(0, 0, -180);
+                    break;
+                case GameplayScreenRotationAngleOption._270:
+                    _mainDisplayer.rotation = Quaternion.Euler(0, 0, -270);
+                    break;
             }
             _trackVolume = (MajEnv.Settings.Audio.Volume.Track + _chartSetting.TrackVolumeOffset).Clamp(0, 2);
 #if !UNITY_EDITOR && UNITY_STANDALONE
@@ -703,7 +723,7 @@ namespace MajdataPlay.Scenes.Game
                 _noteLoader.NoteSpeed = ((float)(107.25 / (71.4184491 * Mathf.Pow(tapSpeed + 0.9975f, -0.985558604f))));
             }
             _noteLoader.TouchSpeed = _setting.Game.TouchSpeed;
-            _noteLoader.ChartRotation = _chartRotation;
+            _noteLoader.ChartRotation = _chartRotation + (2 * (int)_screenRotationAngle);
 
             //var loaderTask = noteLoader.LoadNotes(Chart);
             var loaderTask = _noteLoader.LoadNotesIntoPoolAsync(_chart, _cts.Token);
@@ -787,7 +807,7 @@ namespace MajdataPlay.Scenes.Game
             var isAwaited = !allBackgroundTasks.IsCompleted;
             if (!allBackgroundTasks.IsCompleted)
             {
-                _sceneSwitcher.SetLoadingText($"{"Waiting for all background tasks to suspend".i18n()}...");
+                _sceneSwitcher.SetLoadingText($"{"MAJTEXT_WAITING_FOR_BACKGROUND_TASKS_SUSPEND".i18n()}...");
             }
             while (!allBackgroundTasks.IsCompleted)
             {
@@ -959,6 +979,8 @@ namespace MajdataPlay.Scenes.Game
                         _noteAudioManager.OnLateUpdate();
                         _noteManager.OnLateUpdate();
                         _objectCounter.OnLateUpdate();
+                        AutoTrackSkipUpdate();
+                        AutoQuickRetryUpdate();
                         break;
                 }
                 _noteEffectPool.OnLateUpdate();
@@ -1143,7 +1165,7 @@ namespace MajdataPlay.Scenes.Game
                         }
                         else
                         {
-                            ReturnTo().Forget();
+                            TrackSkipTo(delayMiliseconds: 5000).Forget();
                         }
                     }
                     else if (_2367PressTime >= 0.5f && _isTrackSkipAvailable)
@@ -1153,11 +1175,11 @@ namespace MajdataPlay.Scenes.Game
                             var info = new GameInfo(GameMode.Practice, _gameInfo.Charts, _gameInfo.Levels, 114514);
                             info.TimeRange = _gameInfo.TimeRange;
                             Majdata<GameInfo>.Instance = info;
-                            ReturnTo("Practice").Forget();
+                            TrackSkipTo("Practice", 2000).Forget();
                         }
                         else
                         {
-                            ReturnTo().Forget();
+                            TrackSkipTo(delayMiliseconds: 5000).Forget();
                         }
                     }
                     else if (_3456PressTime >= 0.5f && _isFastRetryAvailable)
@@ -1173,6 +1195,160 @@ namespace MajdataPlay.Scenes.Game
                     return;
                 }
             } 
+        }
+        void AutoTrackSkipUpdate()
+        {
+            if (State != GamePlayStatus.Running && State != GamePlayStatus.Blocking)
+            {
+                return;
+            }
+            if (_autoTrackSkipOption == AutoTrackSkipOption.Disabled)
+            {
+                return;
+            }
+            if (MajEnv.Mode != RunningMode.Play || _gameInfo.IsDanMode || IsPracticeMode || IsAutoplay)
+            {
+                return;
+            }
+
+            var maxAchievement = _objectCounter.CalculateFinalResult();
+            switch (_autoTrackSkipOption)
+            {
+                case AutoTrackSkipOption.S:
+                    if (maxAchievement < 97f)
+                    {
+                        TrackSkipTo(delayMiliseconds: 5000).Forget();
+                    }
+                    break;
+                case AutoTrackSkipOption.SS:
+                    if (maxAchievement < 99f)
+                    {
+                        TrackSkipTo(delayMiliseconds: 5000).Forget();
+                    }
+                    break;
+                case AutoTrackSkipOption.SSS:
+                    if (maxAchievement < 100f)
+                    {
+                        TrackSkipTo(delayMiliseconds: 5000).Forget();
+                    }
+                    break;
+                case AutoTrackSkipOption.SSSPlus:
+                    if (maxAchievement < 100.5f)
+                    {
+                        TrackSkipTo(delayMiliseconds: 5000).Forget();
+                    }
+                    break;
+                case AutoTrackSkipOption.Best:
+                    if ((HistoryScore?.PlayCount ?? 0) == 0)
+                    {
+                        return;
+                    }
+                    if (maxAchievement < HistoryScore!.Acc.DX)
+                    {
+                        TrackSkipTo(delayMiliseconds: 5000).Forget();
+                    }
+                    break;
+                case AutoTrackSkipOption.FC:
+                    if (HasLostFCRequirement())
+                    {
+                        TrackSkipTo(delayMiliseconds: 5000).Forget();
+                    }
+                    break;
+                case AutoTrackSkipOption.AP:
+                    if (HasLostAPRequirement())
+                    {
+                        TrackSkipTo(delayMiliseconds: 5000).Forget();
+                    }
+                    break;
+                case AutoTrackSkipOption.Disabled:
+                    break;
+                default:
+                    throw new ArgumentOutOfRangeException();
+            }
+        }
+        void AutoQuickRetryUpdate()
+        {
+            if (State != GamePlayStatus.Running && State != GamePlayStatus.Blocking)
+            {
+                return;
+            }
+            if (_autoQuickRetryOption == AutoQuickRetryOption.Disabled)
+            {
+                return;
+            }
+            if (_autoTrackSkipOption != AutoTrackSkipOption.Disabled)
+            {
+                return;
+            }
+            if (MajEnv.Mode != RunningMode.Play || _gameInfo.IsDanMode || IsPracticeMode || IsAutoplay)
+            {
+                return;
+            }
+
+            var maxAchievement = _objectCounter.CalculateFinalResult();
+            switch (_autoQuickRetryOption)
+            {
+                case AutoQuickRetryOption.S:
+                    if (maxAchievement < 97f)
+                    {
+                        FastRetry().Forget();
+                    }
+                    break;
+                case AutoQuickRetryOption.SS:
+                    if (maxAchievement < 99f)
+                    {
+                        FastRetry().Forget();
+                    }
+                    break;
+                case AutoQuickRetryOption.SSS:
+                    if (maxAchievement < 100f)
+                    {
+                        FastRetry().Forget();
+                    }
+                    break;
+                case AutoQuickRetryOption.SSSPlus:
+                    if (maxAchievement < 100.5f)
+                    {
+                        FastRetry().Forget();
+                    }
+                    break;
+                case AutoQuickRetryOption.Best:
+                    if ((HistoryScore?.PlayCount ?? 0) == 0)
+                    {
+                        return;
+                    }
+                    if (maxAchievement < HistoryScore!.Acc.DX)
+                    {
+                        FastRetry().Forget();
+                    }
+                    break;
+                case AutoQuickRetryOption.FC:
+                    if (HasLostFCRequirement())
+                    {
+                        FastRetry().Forget();
+                    }
+                    break;
+                case AutoQuickRetryOption.AP:
+                    if (HasLostAPRequirement())
+                    {
+                        FastRetry().Forget();
+                    }
+                    break;
+                case AutoQuickRetryOption.Disabled:
+                    break;
+                default:
+                    throw new ArgumentOutOfRangeException();
+            }
+        }
+        bool HasLostFCRequirement()
+        {
+            var judgeInfo = _objectCounter.GetCurrentTotalJudgeInfo();
+            return judgeInfo.Miss != 0;
+        }
+        bool HasLostAPRequirement()
+        {
+            var judgeInfo = _objectCounter.GetCurrentTotalJudgeInfo();
+            return judgeInfo.Great != 0 || judgeInfo.Good != 0 || judgeInfo.Miss != 0;
         }
         void AudioTimeUpdate()
         {
@@ -1276,6 +1452,16 @@ namespace MajdataPlay.Scenes.Game
                     break;
             }
         }
+        void PlayTrackSkipEffect()
+        {
+            if (TrackSkipAnimation is null)
+            {
+                return;
+            }
+
+            TrackSkipAnimation.SetActive(true);
+            MajInstances.AudioManager.PlaySFX("GameOver.wav");
+        }
         async UniTaskVoid NextRound4Practice(int delayMiliseconds = 100)
         {
             if (State == GamePlayStatus.Ended)
@@ -1327,30 +1513,32 @@ namespace MajdataPlay.Scenes.Game
 
         public void GameOver()
         {
-            //TODO: Play GameOver Animation
-            CalculateScore(playEffect:false);
+            if (State == GamePlayStatus.Ended)
+                return;
 
-            EndGame(targetScene: "TotalResult").Forget();
+            CalculateScore(playEffect:false);
+            _cts.Cancel();
+            _audioSample?.Stop();
+            PlayTrackSkipEffect();
+            EndGame(5000, targetScene: "TotalResult").Forget();
         }
 
         async UniTaskVoid ReturnTo(string sceneName = "List")
         {
             State = GamePlayStatus.Ended;
-            var sceneSwitcher = MajInstances.SceneSwitcher;
-            await sceneSwitcher.FadeInAsync();
-            await UniTask.Delay(500);
             _audioSample?.Stop();
-            ClearAllResources();
-            await UniTask.Yield(PlayerLoopTiming.LastPostLateUpdate);
-            
-            var wait4Recorder = RecordHelper.StopRecordAsync();
-            while (!wait4Recorder.IsCompleted)
-            {
-                _sceneSwitcher.SetLoadingText($"{"Waiting for recorder".i18n()}...");
-                await UniTask.Yield();
-            }
-            _sceneSwitcher.SetLoadingText(string.Empty);
-            sceneSwitcher.SwitchScene(sceneName, false);
+            await ExitToScene(sceneName, 500, false);
+        }
+        async UniTaskVoid TrackSkipTo(string sceneName = "List", int delayMiliseconds = 5000)
+        {
+            if (State == GamePlayStatus.Ended)
+                return;
+
+            State = GamePlayStatus.Ended;
+            _cts.Cancel();
+            _audioSample?.Stop();
+            PlayTrackSkipEffect();
+            await ExitToScene(sceneName, delayMiliseconds, true);
         }
         public async UniTaskVoid EndGame(int delayMiliseconds = 100,string targetScene = "Result")
         {
@@ -1364,6 +1552,30 @@ namespace MajdataPlay.Scenes.Game
             await UniTask.DelayFrame(5);
             
             MajInstances.SceneSwitcher.SwitchScene(targetScene);
+        }
+        async UniTask ExitToScene(string sceneName, int delayMiliseconds = 0, bool delayBeforeFade = false)
+        {
+            var sceneSwitcher = MajInstances.SceneSwitcher;
+            if (delayBeforeFade && delayMiliseconds > 0)
+            {
+                await UniTask.Delay(delayMiliseconds);
+            }
+            await sceneSwitcher.FadeInAsync();
+            if (!delayBeforeFade && delayMiliseconds > 0)
+            {
+                await UniTask.Delay(delayMiliseconds);
+            }
+            ClearAllResources();
+            await UniTask.Yield(PlayerLoopTiming.LastPostLateUpdate);
+
+            var wait4Recorder = RecordHelper.StopRecordAsync();
+            while (!wait4Recorder.IsCompleted)
+            {
+                _sceneSwitcher.SetLoadingText($"{"Waiting for recorder".i18n()}...");
+                await UniTask.Yield();
+            }
+            _sceneSwitcher.SetLoadingText(string.Empty);
+            sceneSwitcher.SwitchScene(sceneName, false);
         }
 
         #endregion
