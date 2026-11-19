@@ -9,6 +9,8 @@ import android.view.KeyEvent;
 import com.unity3d.player.UnityPlayer;
 import com.unity3d.player.UnityPlayerActivity;
 
+import net.majdata.majdataplay.runtime.SystemCAImporter;
+
 public class MajdataPlayActivity extends UnityPlayerActivity
 {
     static CSharpOnNewIntentCallback onNewIntentCallbackProxy;
@@ -20,6 +22,7 @@ public class MajdataPlayActivity extends UnityPlayerActivity
     {
         currentActivity = this;
         super.onCreate(savedInstanceState);
+        SystemCAImporter.tryInit(getApplicationContext());
     }
     @Override
     protected void onNewIntent(Intent intent)
@@ -35,6 +38,7 @@ public class MajdataPlayActivity extends UnityPlayerActivity
     @Override
     protected void onActivityResult(int requestCode, int resultCode, Intent data)
     {
+        super.onActivityResult(requestCode, resultCode, data);
         if (onActivityResultCallbackProxy != null)
         {
             onActivityResultCallbackProxy.OnActivityResult(requestCode, resultCode, data);

@@ -1,35 +1,42 @@
-using Cysharp.Text;
 using Cysharp.Threading.Tasks;
 using MajdataPlay.Buffers;
-using MajdataPlay.Drawing;
-using MajdataPlay.Threading;
-using MajdataPlay.UnsafeKit;
+using MajdataPlay.Collections;
+using MajdataPlay.Diagnostics;
+using MajdataPlay.Net.Models;
+using MajdataPlay.Numerics;
+using MajdataPlay.Utils;
 using Newtonsoft.Json;
 using Newtonsoft.Json.Serialization;
+using Nito.AsyncEx;
 using System;
-using System.Collections;
 using System.Collections.Generic;
-using System.Diagnostics.CodeAnalysis;
-using System.Drawing.Printing;
 using System.Linq;
 using System.Net;
 using System.Net.Http;
-using System.Security.Cryptography;
 using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
-using MajdataPlay.Utils;
-using UnityEngine;
-using UnityEngine.Networking;
-using Nito.AsyncEx;
 #nullable enable
 namespace MajdataPlay.Net
 {
-    internal static class Online
+    /// <summary>
+    /// Accesses the APIs of the online servers. The APIs are grouped like the routes of the server:
+    /// <see cref="Account"/> for <c>account/*</c> and <c>avatar/*</c>, <see cref="Machine"/> for <c>machine/*</c>,
+    /// <see cref="MaiChart"/> for <c>maichart/*</c> and <see cref="Recommend"/> for <c>recommend/*</c>.
+    /// The login and machine registration state of every endpoint and the cached responses are shared by the groups.
+    /// </summary>
+    internal static partial class Online
     {
-        readonly static HttpClient _client = MajEnv.SharedHttpClient;
-        readonly static JsonSerializer _defaultJsonSerializer = JsonSerializer.Create(_defaultJsonSerializerSettings);
-        readonly static JsonSerializerSettings _defaultJsonSerializerSettings = new()
+        private const int MaxConcurrency = 32;
+        /// <summary>The tag of the log messages of the online APIs.</summary>
+        private const string LOG_TAG = "Network";
+
+        /// <summary>The route of the server identity.</summary>
+        private const string API_GET_SERVER_INFO = "info";
+
+        // Declared before the serializer: static initializers run in textual order.
+        /// <summary>The JSON settings of request and response bodies: camel case names, replacing default collections.</summary>
+        private static readonly JsonSerializerSettings _defaultJsonSerializerSettings = new()
         {
             ContractResolver = new DefaultContractResolver
             {
@@ -37,36 +44,36 @@ namespace MajdataPlay.Net
             },
             ObjectCreationHandling = ObjectCreationHandling.Replace
         };
+        /// <summary>The JSON serializer created from <see cref="_defaultJsonSerializerSettings"/>.</summary>
+        private static readonly JsonSerializer _defaultJsonSerializer = JsonSerializer.Create(_defaultJsonSerializerSettings);
 
-        public const string API_GET_USER_INFO = "account/info";
-        public const string API_GET_USER_ICON = "account/icon?username={0}";
-        public const string API_GET_USER_SCORES = "account/scores";
-        public const string API_GET_USER_FAVCOLLECTION = "account/favorite/collection/list";
-        public const string API_GET_MAICHART_LIST = "maichart/list";
-        public const string API_GET_MAICHART_INTERACT = "maichart/{0}/interact";
-        public const string API_GET_MAICHART_SCORE = "maichart/{0}/score";
-        public const string API_GET_MACHINE_INFO = "machine/info";
-        public const string API_GET_AUTH_CHECK = "machine/auth/check";
+        /// <summary>Guards <see cref="_endpointStatistics"/>.</summary>
+        private static SpinLock _dictLock = new();
 
-        public const string API_POST_USER_LOGIN = "account/login";
-        public const string API_POST_USER_LOGOUT = "account/logout";
-        public const string API_POST_MAICHART_INTERACT = "maichart/{0}/interact";
-        public const string API_POST_MAICHART_SCORE = "maichart/{0}/score";
-        public const string API_POST_MACHINE_REGISTER = "machine/register";
-        public const string API_POST_AUTH_REQUEST = "machine/auth/request";
-        public const string API_POST_AUTH_REVOKE = "machine/auth/revoke";
+        /// <summary>The login and machine registration state of every endpoint that was accessed.</summary>
+        private static readonly Dictionary<ApiEndpoint, ApiEndpointStatistics> _endpointStatistics = new();
 
-        static SpinLock _dictLock = new();
-        static SpinLock _cachedResponseLock = new();
+        // Declared before the caches: static initializers run in textual order.
+        /// <summary>How long a response read from a server is reused.</summary>
+        private static readonly TimeSpan s_responseTimeToLive = TimeSpan.FromSeconds(MajEnv.ONLINE_RESPONSE_CACHE_TTL_SEC);
+        /// <summary>The responses of <c>GET maichart/{chartId}/interactsum</c>, by request URI.</summary>
+        private static readonly TtlCache<Uri, MajNetChartInteractSummary> s_interactSummaries = new(s_responseTimeToLive);
+        /// <summary>The responses of <c>GET maichart/{chartId}/comments</c>, by request URI, which holds the order and the page.</summary>
+        private static readonly TtlCache<Uri, MajNetCommentPage> s_commentPages = new(s_responseTimeToLive);
+        /// <summary>The responses of <c>GET maiscore/leaderboard/chart/by-id/{chartId}</c>, by request URI.</summary>
+        private static readonly TtlCache<Uri, MajNetSongScoreInfo> s_scoreInfos = new(s_responseTimeToLive);
 
-        readonly static Dictionary<OnlineSongDetail, CachedApiEndpointResponse> _cachedResponse = new();
-        readonly static Dictionary<ApiEndpoint, ApiEndpointStatistics> _endpointStatistics = new();
-
+        /// <summary>
+        /// Revalidates the machine registration and the login of every endpoint that reports them, so a session that expired
+        /// on the server is no longer treated as alive.
+        /// </summary>
+        /// <param name="token">The token canceling the requests.</param>
+        /// <returns>A task that completes when every endpoint was checked.</returns>
         public static async ValueTask HeartbeatAsync(CancellationToken token = default)
         {
-            using var rentedBuffer = new RentedList<ApiEndpointStatistics>();
+            using var rentedBuffer = new PooledList<ApiEndpointStatistics>();
             await UniTask.SwitchToThreadPool();
-            MajDebug.LogDebug("Online heartbeat executing");
+            MajDebug.LogDebug(LOG_TAG, "[Online] Heartbeat executing");
             GetAllApiEndpointStatistic(rentedBuffer);
             foreach (var statistics in rentedBuffer)
             {
@@ -76,13 +83,13 @@ namespace MajdataPlay.Net
                     {
                         using (await statistics.LockAsync(token))
                         {
-                            var isAlive = await CheckMachineRegisterAsync(statistics.Endpoint, token);
+                            var isAlive = await Machine.CheckRegistrationAsync(statistics.Endpoint, token);
                             statistics.IsMachineRegistered = isAlive;
                         }
                     }
                     catch (Exception e)
                     {
-                        MajDebug.LogException(e);
+                        MajDebug.LogException(LOG_TAG, e);
                     }
                 }
                 if (statistics.IsUserLoggedIn is true)
@@ -91,1088 +98,220 @@ namespace MajdataPlay.Net
                     {
                         using (await statistics.LockAsync(token))
                         {
-                            var rsp = await GetUserInfoAsyncInternal(statistics.Endpoint, token);
+                            var rsp = await Account.RequestProfileAsync(statistics.Endpoint, token);
                             var isAlive = rsp.StatusCode is not HttpStatusCode.Unauthorized;
                             statistics.IsUserLoggedIn = isAlive;
                         }
                     }
                     catch (Exception e)
                     {
-                        MajDebug.LogException(e);
+                        MajDebug.LogException(LOG_TAG, e);
                     }
                 }
-                
             }
-            MajDebug.LogDebug("Online heartbeat has been completed");
+            MajDebug.LogDebug(LOG_TAG, "[Online] Heartbeat has been completed");
         }
-        public static async ValueTask<EndpointResponse<UserSummary>> GetUserInfoAsync(ApiEndpoint apiEndpoint, CancellationToken token = default)
+        /// <summary>Fetches the identity of the server behind an endpoint from <c>GET info</c>.</summary>
+        /// <param name="apiEndpoint">The endpoint, which may be one of several addresses of the server, such as a reverse proxy.</param>
+        /// <param name="token">The token canceling the request.</param>
+        /// <returns>The server identity, or null when the request failed, for example because the server does not provide the API.</returns>
+        public static async ValueTask<MajNetServerInfo?> GetServerInfoAsync(ApiEndpoint apiEndpoint, CancellationToken token = default)
         {
             await UniTask.SwitchToThreadPool();
-            var statistic = GetApiEndpointStatistic(apiEndpoint);
-            var rsp = await GetUserInfoAsyncInternal(apiEndpoint, token);
-            if (rsp.StatusCode is HttpStatusCode.Unauthorized)
+            var url = apiEndpoint.Url.Combine(API_GET_SERVER_INFO);
+
+            for (var i = 0; i < MajEnv.HttpRequestMaxRetry; i++)
             {
-                using (await statistic.LockAsync())
+                var rsp = await GetAsync(url, token);
+                var e = default(Exception?);
+                if (rsp.IsSuccessfully && rsp.TryDeserialize<MajNetServerInfo>(out var serverInfo, out e) && serverInfo is not null)
                 {
-                    statistic.IsUserLoggedIn = false;
+                    return serverInfo;
+                }
+                MajDebug.LogError(LOG_TAG, $"[Online] Failed to get server info: {e?.Message ?? rsp.StatusCode?.ToString() ?? "Unknown error"}");
+                if (rsp.ErrorCode == HttpErrorCode.Canceled || rsp.StatusCode is not null)
+                {
+                    break;
                 }
             }
-            else if (rsp.StatusCode is HttpStatusCode.OK)
-            {
-                using (await statistic.LockAsync())
-                {
-                    statistic.IsUserLoggedIn = true;
-                }
-            }
-            return rsp;
+
+            return null;
         }
-        public static async ValueTask<MajNetAccountSongScore[]> GetUserScoresAsync(ApiEndpoint apiEndpoint, CancellationToken token = default)
+        /// <summary>
+        /// Drops every cached response, so the next requests reach the server. Requests still running are not cached when
+        /// they complete.
+        /// </summary>
+        public static void ClearResponseCache()
         {
-            await UniTask.SwitchToThreadPool();
+            s_interactSummaries.Clear();
+            s_commentPages.Clear();
+            s_scoreInfos.Clear();
+        }
+
+        #region Internal method
+        /// <summary>Sends a GET request and wraps its outcome; transport failures, timeouts and cancellations become unsuccessful responses.</summary>
+        /// <param name="uri">The requested URI.</param>
+        /// <param name="token">The token canceling the request.</param>
+        /// <param name="client">The client sending the request; <see cref="MajEnv.SharedHttpClient"/> when null.</param>
+        /// <returns>The response; never throws.</returns>
+        private static async ValueTask<EndpointResponse> GetAsync(Uri uri, CancellationToken token = default, HttpClient? client = null)
+        {
             try
             {
-                var uri = apiEndpoint.Url.Combine(API_GET_USER_SCORES);
-                var rsp = default(EndpointResponse);
-                for (var i = 0; i <= MajEnv.HTTP_REQUEST_MAX_RETRY; i++)
-                {
-                    rsp = await GetAsync(uri, token);
-                    if (rsp.StatusCode is HttpStatusCode.Unauthorized)
-                    {
-                        return Array.Empty<MajNetAccountSongScore>();
-                    }
-                    else if (!rsp.IsSuccessfully || !rsp.IsDeserializable)
-                    {
-                        MajDebug.LogError("Failed to get user scores");
-                        MajDebug.LogError($"Url:{uri}\nStatusCode:{rsp.StatusCode}\nErrorCode:{rsp.ErrorCode}\nMessage:{rsp.Message}");
-                        continue;
-                    }
-                    var userScores = await rsp.DeserializeAsync<MajNetAccountSongScore[]>() ?? Array.Empty<MajNetAccountSongScore>();
-                    MajDebug.LogInfo($"Fetched {userScores.Length} scores for the user from endpoint");
-                    return userScores;
-                }
-                return Array.Empty<MajNetAccountSongScore>();
+                client ??= MajEnv.SharedHttpClient;
+                var rsp = await client.GetAsync(uri, token);
+                var buffer = await rsp.Content.ReadAsByteArrayAsync();
+                return CreateResponse(HttpMethod.Get, uri, rsp, buffer);
+            }
+            catch (OperationCanceledException)
+            {
+                return CreateCanceledResponse(HttpMethod.Get, uri, token);
             }
             catch (Exception e)
             {
-                MajDebug.LogError("Get user scores failed: ");
-                MajDebug.LogException(e);
-                return Array.Empty<MajNetAccountSongScore>();
+                return CreateUnreachableResponse(HttpMethod.Get, uri, e);
             }
         }
-        public static async ValueTask<bool> CheckMachineRegisterAsync(ApiEndpoint apiEndpoint, CancellationToken token = default)
+        /// <summary>Sends a POST request without a body.</summary>
+        /// <param name="uri">The requested URI.</param>
+        /// <param name="token">The token canceling the request.</param>
+        /// <returns>The response; never throws.</returns>
+        private static ValueTask<EndpointResponse> PostAsync(Uri uri, CancellationToken token = default)
         {
-            await UniTask.SwitchToThreadPool();
-            var uri = apiEndpoint.Url.Combine(API_GET_MACHINE_INFO);
-#if ENABLE_IL2CPP || MAJDATA_IL2CPP_DEBUG
-            var rsp = await GetAsync(uri, token);
-
-            return rsp.IsSuccessfully;
-#else
-            var rsp = await GetAsync(uri, token);
-
-            return rsp.IsSuccessfully;
-#endif
+            return PostAsync(uri, null, token);
         }
-        public static async ValueTask<EndpointResponse> RegisterAsync(ApiEndpoint apiEndpoint, MachineInfo machineInfo, CancellationToken token = default)
+        /// <summary>Sends a POST request.</summary>
+        /// <param name="uri">The requested URI.</param>
+        /// <param name="content">The body, which the request disposes; an empty JSON body when null.</param>
+        /// <param name="token">The token canceling the request.</param>
+        /// <param name="client">The client sending the request; <see cref="MajEnv.SharedHttpClient"/> when null.</param>
+        /// <returns>The response; never throws.</returns>
+        private static ValueTask<EndpointResponse> PostAsync(Uri uri, HttpContent? content, CancellationToken token = default, HttpClient? client = null)
         {
-            var statistics = GetApiEndpointStatistic(apiEndpoint);
-        FAST_RETURN:
-            if (statistics.IsMachineRegistrationSupported is false)
+            return SendAsync(HttpMethod.Post, uri, content, token, client);
+        }
+        /// <summary>Sends a request with a body and wraps its outcome; transport failures, timeouts and cancellations become unsuccessful responses.</summary>
+        /// <param name="method">The HTTP method.</param>
+        /// <param name="uri">The requested URI.</param>
+        /// <param name="content">The body, which the request disposes; an empty JSON body when null.</param>
+        /// <param name="token">The token canceling the request.</param>
+        /// <param name="client">The client sending the request; <see cref="MajEnv.SharedHttpClient"/> when null.</param>
+        /// <returns>The response; never throws.</returns>
+        private static async ValueTask<EndpointResponse> SendAsync(HttpMethod method, Uri uri, HttpContent? content, CancellationToken token = default, HttpClient? client = null)
+        {
+            try
             {
-                return new()
+                client ??= MajEnv.SharedHttpClient;
+                using var request = new HttpRequestMessage(method, uri)
                 {
-                    IsSuccessfully = false,
-                    IsDeserializable = false,
-                    StatusCode = HttpStatusCode.NotFound,
-                    ErrorCode = HttpErrorCode.NotSupported,
-                    Message = "MAJTEXT_ONLINE_MACHINE_REGISTRATION_UNSUPPORTED"
+                    Content = content ?? new StringContent(string.Empty, Encoding.UTF8, "application/json")
                 };
+                using var rsp = await client.SendAsync(request, token);
+                var buffer = await rsp.Content.ReadAsByteArrayAsync();
+                return CreateResponse(method, uri, rsp, buffer);
             }
-            using (await statistics.LockAsync())
+            catch (OperationCanceledException)
             {
-                if (statistics.IsMachineRegistrationSupported is false)
-                {
-                    goto FAST_RETURN;
-                }
-                var uri = apiEndpoint.Url.Combine(API_POST_MACHINE_REGISTER);
-                var json = await Serializer.Json.SerializeAsync(machineInfo, _defaultJsonSerializer);
-
-#if ENABLE_IL2CPP || MAJDATA_IL2CPP_DEBUG
-                var rsp = await PostAsync(uri, json, "application/json", token);
-                if (!rsp.IsSuccessfully && rsp.StatusCode == HttpStatusCode.NotFound)
-                {
-                    statistics.IsMachineRegistrationSupported = false;
-                    statistics.IsMachineRegistered = false;
-                    return new()
-                    {
-                        IsSuccessfully = false,
-                        IsDeserializable = false,
-                        StatusCode = HttpStatusCode.NotFound,
-                        ErrorCode = HttpErrorCode.NotSupported,
-                        Message = "MAJTEXT_ONLINE_MACHINE_REGISTRATION_UNSUPPORTED"
-                    };
-                }
-                statistics.IsMachineRegistrationSupported = true;
-                statistics.IsMachineRegistered = rsp.IsSuccessfully;
-                return rsp;
-#else
-                var rsp = await PostAsync(uri, new StringContent(json, Encoding.UTF8, "application/json"), token);
-                if (!rsp.IsSuccessfully && rsp.StatusCode == HttpStatusCode.NotFound)
-                {
-                    statistics.IsMachineRegistrationSupported = false;
-                    statistics.IsMachineRegistered = false;
-                    return new()
-                    {
-                        IsSuccessfully = false,
-                        IsDeserializable = false,
-                        StatusCode = HttpStatusCode.NotFound,
-                        ErrorCode = HttpErrorCode.NotSupported,
-                        Message = "MAJTEXT_ONLINE_MACHINE_REGISTRATION_UNSUPPORTED"
-                    };
-                }
-                statistics.IsMachineRegistrationSupported = true;
-                statistics.IsMachineRegistered = rsp.IsSuccessfully;
-                return rsp;
-#endif
+                return CreateCanceledResponse(method, uri, token);
+            }
+            catch (Exception e)
+            {
+                return CreateUnreachableResponse(method, uri, e);
             }
         }
-        public static async ValueTask<EndpointResponse> AuthRequestAsync(ApiEndpoint apiEndpoint, CancellationToken token = default)
+        /// <summary>Wraps a response that reached the client, successful for a status code from 200 to 299.</summary>
+        /// <param name="method">The HTTP method, for the log.</param>
+        /// <param name="uri">The requested URI.</param>
+        /// <param name="rsp">The HTTP response.</param>
+        /// <param name="buffer">The body of the response.</param>
+        /// <returns>The wrapped response.</returns>
+        private static EndpointResponse CreateResponse(HttpMethod method, Uri uri, HttpResponseMessage rsp, byte[] buffer)
         {
-            var statistics = GetApiEndpointStatistic(apiEndpoint);
-            if (statistics.IsMachineRegistrationSupported is false)
+            var isSuccessful = ((int)rsp.StatusCode).InRange(200, 299);
+            var epRsp = new EndpointResponse(buffer, _defaultJsonSerializer, _defaultJsonSerializerSettings)
             {
-                return new()
-                {
-                    IsSuccessfully = false,
-                    IsDeserializable = false,
-                    StatusCode = HttpStatusCode.NotFound,
-                    ErrorCode = HttpErrorCode.NotSupported,
-                    Message = "MAJTEXT_ONLINE_MACHINE_REGISTRATION_UNSUPPORTED"
-                };
-            }
-            else if (statistics.IsMachineRegistrationSupported is null)
+                Endpoint = uri,
+                IsSuccessfully = isSuccessful,
+                IsDeserializable = isSuccessful,
+                ErrorCode = isSuccessful ? HttpErrorCode.NoError : HttpErrorCode.Unsuccessful,
+                StatusCode = rsp.StatusCode,
+                Headers = rsp.Headers.ToDictionary(kv => kv.Key.ToLower(), kv => kv.Value),
+                Message = isSuccessful ? "Ok" : string.Empty
+            };
+            if (isSuccessful)
             {
-                throw new InvalidOperationException();
-            }
-            var uri = apiEndpoint.Url.Combine(API_POST_AUTH_REQUEST);
-            var rsp = default(EndpointResponse);
-#if ENABLE_IL2CPP || MAJDATA_IL2CPP_DEBUG
-            rsp = await PostAsync(uri, null, token);
-#else
-            rsp = await PostAsync(uri, token);
-#endif
-            if (rsp.StatusCode == HttpStatusCode.Created)
-            {
-                return new(rsp.AsMemory(), _defaultJsonSerializer, _defaultJsonSerializerSettings)
-                {
-                    IsSuccessfully = true,
-                    IsDeserializable = true,
-                    StatusCode = rsp.StatusCode,
-                    ErrorCode = HttpErrorCode.NoError,
-                    Headers = rsp.Headers,
-                    Message = string.Empty
-                };
+                MajDebug.LogDebug(LOG_TAG, $"[Online][{method}] {uri}\n{epRsp}");
             }
             else
             {
-                return new()
-                {
-                    IsSuccessfully = false,
-                    IsDeserializable = false,
-                    StatusCode = rsp.StatusCode,
-                    ErrorCode = rsp.ErrorCode,
-                    Headers = rsp.Headers,
-                    Message = "MAJTEXT_ONLINE_MACHINE_AUTH_REQUEST_FAILED"
-                };
+                MajDebug.LogError(LOG_TAG, $"[Online][{method}] {uri} - Unsuccessful\n{epRsp}");
             }
+            return epRsp;
         }
-        public static async ValueTask<EndpointResponse> AuthCheckAsync(ApiEndpoint apiEndpoint, string authId, CancellationToken token = default)
+        /// <summary>Wraps a request that was canceled by its token or timed out.</summary>
+        /// <param name="method">The HTTP method, for the log.</param>
+        /// <param name="uri">The requested URI.</param>
+        /// <param name="token">The token of the request, which tells a cancellation from a timeout.</param>
+        /// <returns>An unsuccessful response with <see cref="HttpErrorCode.Canceled"/> or <see cref="HttpErrorCode.Timeout"/>.</returns>
+        private static EndpointResponse CreateCanceledResponse(HttpMethod method, Uri uri, CancellationToken token)
         {
-            var statistics = GetApiEndpointStatistic(apiEndpoint);
-            if (statistics.IsMachineRegistrationSupported is false)
+            var errorCode = HttpErrorCode.Timeout;
+            if (token.IsCancellationRequested)
             {
-                return new()
-                {
-                    IsSuccessfully = false,
-                    IsDeserializable = false,
-                    StatusCode = HttpStatusCode.NotFound,
-                    ErrorCode = HttpErrorCode.NotSupported,
-                    Message = "MAJTEXT_ONLINE_MACHINE_REGISTRATION_UNSUPPORTED"
-                };
+                errorCode = HttpErrorCode.Canceled;
+                MajDebug.LogError(LOG_TAG, $"[Online][{method}] {uri} - Canceled");
             }
-            else if (statistics.IsMachineRegistrationSupported is null)
+            else
             {
-                throw new InvalidOperationException();
+                MajDebug.LogError(LOG_TAG, $"[Online][{method}] {uri} - Timeout");
             }
-            var uriBuilder = new UriBuilder(apiEndpoint.Url.Combine(API_GET_AUTH_CHECK));
-            uriBuilder.Query = $"auth-id={authId}";
-            var uri = uriBuilder.Uri;
-            var rsp = await GetAsync(uri, token);
-            return rsp;
+            return new EndpointResponse(Array.Empty<byte>(), _defaultJsonSerializer, _defaultJsonSerializerSettings)
+            {
+                Endpoint = uri,
+                IsSuccessfully = false,
+                IsDeserializable = false,
+                ErrorCode = errorCode,
+                StatusCode = null,
+                Message = string.Empty
+            };
         }
-        public static async ValueTask<EndpointResponse> AuthRevokeAsync(ApiEndpoint apiEndpoint, string authId, CancellationToken token = default)
+        /// <summary>Wraps a request that failed before a response arrived.</summary>
+        /// <param name="method">The HTTP method, for the log.</param>
+        /// <param name="uri">The requested URI.</param>
+        /// <param name="e">The failure.</param>
+        /// <returns>An unsuccessful response with <see cref="HttpErrorCode.Unreachable"/>.</returns>
+        private static EndpointResponse CreateUnreachableResponse(HttpMethod method, Uri uri, Exception e)
         {
-            var statistics = GetApiEndpointStatistic(apiEndpoint);
-            if (statistics.IsMachineRegistrationSupported is false)
+            MajDebug.LogError(LOG_TAG, $"[Online][{method}] {uri} - Unknown Error\n{e}");
+            return new EndpointResponse(Array.Empty<byte>(), _defaultJsonSerializer, _defaultJsonSerializerSettings)
             {
-                return new()
-                {
-                    IsSuccessfully = false,
-                    IsDeserializable = false,
-                    StatusCode = HttpStatusCode.NotFound,
-                    ErrorCode = HttpErrorCode.NotSupported,
-                    Message = "MAJTEXT_ONLINE_MACHINE_REGISTRATION_UNSUPPORTED"
-                };
-            }
-            else if (statistics.IsMachineRegistrationSupported is null)
-            {
-                throw new InvalidOperationException();
-            }
-            var uriBuilder = new UriBuilder(apiEndpoint.Url.Combine(API_POST_AUTH_REVOKE));
-            uriBuilder.Query = $"auth-id={authId}";
-            var uri = uriBuilder.Uri;
-            var rsp = default(EndpointResponse);
-#if ENABLE_IL2CPP || MAJDATA_IL2CPP_DEBUG
-            rsp = await PostAsync(uri, null, token);
-#else
-            rsp = await PostAsync(uri, token);
-#endif
-            return rsp;
+                Endpoint = uri,
+                IsSuccessfully = false,
+                IsDeserializable = false,
+                ErrorCode = HttpErrorCode.Unreachable,
+                StatusCode = null,
+                Message = e.ToString()
+            };
         }
-        public static async ValueTask<EndpointResponse> LoginAsync(ApiEndpoint apiEndpoint, string username, string password, CancellationToken token = default)
+        /// <summary>Serializes a request body with the camel case names the server expects.</summary>
+        /// <typeparam name="T">The type of the value.</typeparam>
+        /// <param name="value">The value to serialize.</param>
+        /// <returns>A task returning the JSON text.</returns>
+        private static Task<string> SerializeJsonAsync<T>(T value)
         {
-            await UniTask.SwitchToThreadPool();
-            if (apiEndpoint == null)
-            {
-                throw new ArgumentNullException(nameof(apiEndpoint));
-            }
-            var statistic = GetApiEndpointStatistic(apiEndpoint);
-            if (statistic.IsUserLoggedIn is true)
-            {
-                return new()
-                {
-                    IsSuccessfully = true,
-                    IsDeserializable = false,
-                    StatusCode = HttpStatusCode.OK,
-                    ErrorCode = HttpErrorCode.NoError,
-                    Message = string.Empty
-                };
-            }
-            if (username == "YourUsername" || password == "YourUsername" ||
-                    string.IsNullOrEmpty(username) || string.IsNullOrEmpty(password))
-            {
-                return new EndpointResponse()
-                {
-                    ErrorCode = HttpErrorCode.InvalidRequest,
-                    IsSuccessfully = false,
-                    IsDeserializable = false,
-                    Message = "MAJTEXT_ONLINE_USERNAME_OR_PASSWORD_UNSET"
-                };
-            }
-
-            var pwdHashStr = HashHelper.ToHexString(await HashHelper.ComputeHashAsync(Encoding.UTF8.GetBytes(password)));
-            var uri = apiEndpoint.Url.Combine(API_POST_USER_LOGIN);
-#if ENABLE_IL2CPP || MAJDATA_IL2CPP_DEBUG
-            await UniTask.SwitchToMainThread();
-            var form = new WWWForm();
-            form.AddField("username", username);
-            form.AddField("password", pwdHashStr.Replace("-", "").ToLower());
-            var rsp = await PostAsync(uri, form, token);
-#else
-            var formData = new MultipartFormDataContent
-                {
-                    { new StringContent(username), "username" },
-                    { new StringContent(pwdHashStr.Replace("-", "").ToLower()), "password" }
-                };
-
-            var rsp = await PostAsync(uri, formData, token);
-#endif
-            if (rsp.StatusCode is HttpStatusCode.Unauthorized)
-            {
-                rsp = new(rsp.AsMemory(), _defaultJsonSerializer, _defaultJsonSerializerSettings)
-                {
-                    StatusCode = rsp.StatusCode,
-                    ErrorCode = rsp.ErrorCode,
-                    IsSuccessfully = rsp.IsSuccessfully,
-                    IsDeserializable = rsp.IsDeserializable,
-                    Headers = rsp.Headers,
-                    Message = "MAJTEXT_ONLINE_USERNAME_OR_PASSWORD_INCORRECT"
-                };
-            }
-            else if (rsp.StatusCode is HttpStatusCode.OK)
-            {
-                using (await statistic.LockAsync())
-                {
-                    statistic.IsUserLoggedIn = true;
-                }
-            }
-            return rsp;
+            return Serializer.Json.SerializeAsync(value, _defaultJsonSerializer);
         }
-        public static async ValueTask LogoutAllAsync(CancellationToken token = default)
+        /// <summary>Wraps JSON text as a request body; a request disposes its body, so every attempt needs a new one.</summary>
+        /// <param name="json">The JSON text.</param>
+        /// <returns>The body.</returns>
+        private static StringContent CreateJsonContent(string json)
         {
-            using var rentedBuffer = new RentedList<ApiEndpointStatistics>();
-            await UniTask.SwitchToThreadPool();
-            GetAllApiEndpointStatistic(rentedBuffer);
-            foreach (var statistics in rentedBuffer)
-            {
-                using (await statistics.LockAsync())
-                {
-                    var apiEndpoint = statistics.Endpoint;
-                    try
-                    {
-                        MajDebug.LogInfo("Logout");
-                        var uri = apiEndpoint.Url.Combine(API_POST_USER_LOGOUT);
-                        var rsp = default(EndpointResponse);
-#if ENABLE_IL2CPP || MAJDATA_IL2CPP_DEBUG
-                        rsp = await PostAsync(uri, null, token);
-#else
-                        rsp = await PostAsync(uri, token);
-#endif
-                        MajDebug.LogInfo(rsp.Message + rsp.ErrorCode + rsp.StatusCode);
-                    }
-                    catch (Exception e)
-                    {
-                        MajDebug.LogException(e);
-                    }
-                    finally
-                    {
-                        statistics.IsUserLoggedIn = false;
-                        apiEndpoint.RuntimeConfig.AuthMethod = NetAuthMethodOption.None;
-                        apiEndpoint.RuntimeConfig.Avatar = null;
-                        apiEndpoint.RuntimeConfig.Username = "???";
-                        apiEndpoint.RuntimeConfig.AuthUsername = apiEndpoint.Username;
-                        apiEndpoint.RuntimeConfig.AuthPassword = apiEndpoint.Password;
-                    }
-                }
-            }
+            return new StringContent(json, Encoding.UTF8, "application/json");
         }
-        public static async ValueTask<MajNetSongInteract?> GetChartInteractAsync(OnlineSongDetail song, CancellationToken token = default)
-        {
-            await UniTask.SwitchToThreadPool();
-            var cachedResponse = GetCachedResponse(song);
-            var cachedInteract = cachedResponse.Interact;
-            var isCacheAlive = (DateTime.Now - cachedInteract.LastActive).TotalSeconds < MajEnv.ONLINE_RESPONSE_CACHE_TTL_SEC;
-            if (isCacheAlive)
-            {
-                return cachedInteract.Response;
-            }
-            using (await cachedInteract.RequestLock.LockAsync(token))
-            {
-                isCacheAlive = (DateTime.Now - cachedInteract.LastActive).TotalSeconds < MajEnv.ONLINE_RESPONSE_CACHE_TTL_SEC;
-                if (isCacheAlive)
-                {
-                    return cachedInteract.Response;
-                }
-                var serverInfo = song.ServerInfo;
-                var interactUrl = BuildMaiChartUri(song.ServerInfo, API_GET_MAICHART_INTERACT, song.Id);
-                var rsp = default(EndpointResponse);
-
-                for (var i = 0; i <= MajEnv.HTTP_REQUEST_MAX_RETRY; i++)
-                {
-                    var e = default(Exception?);
-                    rsp = await GetAsync(interactUrl, token);
-                    if (rsp.IsSuccessfully && rsp.IsDeserializable && rsp.TryDeserialize<MajNetSongInteract?>(out var intlist, out e) && intlist is not null)
-                    {
-                        MajDebug.LogDebug(rsp);
-                        if (intlist is MajNetSongInteract interactRsp)
-                        {
-                            cachedResponse.Interact.Response = interactRsp;
-                            cachedResponse.Interact.LastActive = DateTime.Now;
-                        }
-                        return intlist;
-                    }
-                    else
-                    {
-                        MajDebug.LogError(rsp);
-                        MajDebug.LogError($"Failed to get chart interact: {e?.Message ?? "Unknown error"}");
-                    }
-                    if (rsp.ErrorCode == HttpErrorCode.Canceled)
-                    {
-                        break;
-                    }
-                    else if (rsp.StatusCode is HttpStatusCode.BadRequest
-                        or HttpStatusCode.NotFound
-                        or HttpStatusCode.Unauthorized
-                        or HttpStatusCode.Forbidden)
-                    {
-                        return null;
-                    }
-                    else if (!rsp.IsSuccessfully && rsp.StatusCode is not null)
-                    {
-                        return null;
-                    }
-                }
-                return null;
-            }
-        }
-        public static async ValueTask<MajNetSongScoreInfo?> GetChartScoreInfoAsync(OnlineSongDetail song, CancellationToken token = default)
-        {
-            await UniTask.SwitchToThreadPool();
-            var cachedResponse = GetCachedResponse(song);
-            var cachedScoreInfo = cachedResponse.ScoreInfo;
-            var isCacheAlive = (DateTime.Now - cachedScoreInfo.LastActive).TotalSeconds < MajEnv.ONLINE_RESPONSE_CACHE_TTL_SEC;
-            if (isCacheAlive)
-            {
-                return cachedScoreInfo.Response;
-            }
-            using (await cachedScoreInfo.RequestLock.LockAsync(token))
-            {
-                isCacheAlive = (DateTime.Now - cachedScoreInfo.LastActive).TotalSeconds < MajEnv.ONLINE_RESPONSE_CACHE_TTL_SEC;
-                if (isCacheAlive)
-                {
-                    return cachedScoreInfo.Response;
-                }
-                var serverInfo = song.ServerInfo;
-                var interactUrl = BuildMaiChartUri(song.ServerInfo, API_GET_MAICHART_SCORE, song.Id);
-                var rsp = default(EndpointResponse);
-
-                for (var i = 0; i <= MajEnv.HTTP_REQUEST_MAX_RETRY; i++)
-                {
-                    var e = default(Exception?);
-                    rsp = await GetAsync(interactUrl, token);
-                    if (rsp.IsSuccessfully && rsp.IsDeserializable && rsp.TryDeserialize<MajNetSongScoreInfo?>(out var scoreInfo, out e) && scoreInfo is not null)
-                    {
-                        if (scoreInfo is MajNetSongScoreInfo scoreInfoRsp)
-                        {
-                            cachedScoreInfo.Response = scoreInfoRsp;
-                            cachedScoreInfo.LastActive = DateTime.Now;
-                        }
-                        MajDebug.LogDebug(rsp);
-                        return scoreInfo;
-                    }
-                    else
-                    {
-                        MajDebug.LogError(rsp);
-                        MajDebug.LogError($"Failed to get chart interact: {e?.Message ?? "Unknown error"}");
-                    }
-                    if (rsp.ErrorCode == HttpErrorCode.Canceled)
-                    {
-                        break;
-                    }
-                    else if (rsp.StatusCode is HttpStatusCode.BadRequest
-                        or HttpStatusCode.NotFound
-                        or HttpStatusCode.Unauthorized
-                        or HttpStatusCode.Forbidden)
-                    {
-                        return null;
-                    }
-                    else if (!rsp.IsSuccessfully && rsp.StatusCode is not null)
-                    {
-                        return null;
-                    }
-                }
-                return null;
-            }
-        }
-
-        public static async ValueTask<EndpointResponse> PostLikeAsync(OnlineSongDetail song, CancellationToken token = default)
-        {
-            await UniTask.SwitchToThreadPool();
-            var serverInfo = song.ServerInfo;
-            var interactUrl = BuildMaiChartUri(song.ServerInfo, API_POST_MAICHART_INTERACT, song.Id);
-            var rsp = default(EndpointResponse);
-
-            for (var i = 0; i <= MajEnv.HTTP_REQUEST_MAX_RETRY; i++)
-            {
-#if ENABLE_IL2CPP || MAJDATA_IL2CPP_DEBUG
-                var form = new WWWForm();
-                form.AddField("type", "like");
-                form.AddField("content", "...");
-
-                rsp = await PostAsync(interactUrl, form, token);
-#else
-                var formData = new MultipartFormDataContent
-                {
-                    { new StringContent("like"), "type" },
-                    { new StringContent("..."), "content" },
-                };
-                rsp = await PostAsync(interactUrl, formData, token);
-#endif
-                if (rsp.IsSuccessfully)
-                {
-                    MajDebug.LogDebug(rsp);
-                    var cachedResponse = GetCachedResponse(song);
-                    using (await cachedResponse.Interact.RequestLock.LockAsync())
-                    {
-                        cachedResponse.Interact.LastActive = DateTime.UnixEpoch;
-                    }
-                    return rsp;
-                }
-                else
-                {
-                    MajDebug.LogError(rsp);
-                }
-                if (rsp.ErrorCode == HttpErrorCode.Canceled)
-                {
-                    break;
-                }
-                else if (rsp.StatusCode is HttpStatusCode.BadRequest
-                    or HttpStatusCode.NotFound
-                    or HttpStatusCode.Unauthorized
-                    or HttpStatusCode.Forbidden)
-                {
-                    break;
-                }
-                else if (!rsp.IsSuccessfully && rsp.StatusCode is not null)
-                {
-                    break;
-                }
-            }
-            return rsp;
-        }
-        public static async ValueTask<EndpointResponse> PostScoreAsync(OnlineSongDetail song, MaiScore score, CancellationToken token = default)
-        {
-            await UniTask.SwitchToThreadPool();
-            var serverInfo = song.ServerInfo;
-            var scoreUrl = BuildMaiChartUri(song.ServerInfo, API_POST_MAICHART_SCORE, song.Id);
-            var json = await Serializer.Json.SerializeAsync(score, _defaultJsonSerializer);
-            var rsp = default(EndpointResponse);
-
-
-            for (var i = 0; i < MajEnv.HTTP_REQUEST_MAX_RETRY; i++)
-            {
-#if ENABLE_IL2CPP || MAJDATA_IL2CPP_DEBUG
-                rsp = await PostAsync(scoreUrl, json, "application/json", token);
-#else
-                rsp = await PostAsync(scoreUrl, new StringContent(json, Encoding.UTF8, "application/json"), token);
-#endif
-                if (rsp.IsSuccessfully)
-                {
-                    MajDebug.LogDebug(rsp);
-                    var cachedResponse = GetCachedResponse(song);
-                    using (await cachedResponse.ScoreInfo.RequestLock.LockAsync())
-                    {
-                        cachedResponse.ScoreInfo.LastActive = DateTime.UnixEpoch;
-                    }
-                    return rsp;
-                }
-                else
-                {
-                    MajDebug.LogError(rsp);
-                }
-                if (rsp.ErrorCode == HttpErrorCode.Canceled)
-                {
-                    break;
-                }
-                else if (rsp.StatusCode is HttpStatusCode.BadRequest
-                    or HttpStatusCode.NotFound
-                    or HttpStatusCode.Unauthorized
-                    or HttpStatusCode.Forbidden)
-                {
-                    break;
-                }
-                else if (!rsp.IsSuccessfully && rsp.StatusCode is not null)
-                {
-                    break;
-                }
-            }
-
-            return rsp;
-        }
-        public static async ValueTask<MajnetSongDetail[]?> GetChartListAsync(ApiEndpoint apiEndpoint, CancellationToken token = default)
-        {
-            await UniTask.SwitchToThreadPool();
-            var url = apiEndpoint.Url.Combine(API_GET_MAICHART_LIST);
-            var rsp = default(EndpointResponse);
-
-            for (var i = 0; i < MajEnv.HTTP_REQUEST_MAX_RETRY; i++)
-            {
-                rsp = await GetAsync(url, token);
-                var e = default(Exception?);
-                if (rsp.IsSuccessfully && rsp.TryDeserialize<MajnetSongDetail[]>(out var chartList, out e) && chartList is not null)
-                {
-                    MajDebug.LogDebug(rsp);
-                    return chartList;
-                }
-                else
-                {
-                    MajDebug.LogError(rsp);
-                    MajDebug.LogError($"Failed to get chart list: {e?.Message ?? "Unknown error"}");
-                }
-                if (rsp.ErrorCode == HttpErrorCode.Canceled)
-                {
-                    break;
-                }
-                else if (!rsp.IsSuccessfully && rsp.StatusCode is not HttpStatusCode.OK)
-                {
-                    break;
-                }
-            }
-
-            return null;
-        }
-
-        public static async ValueTask<DanInfo[]?> GetUserOnlineFavCollection(ApiEndpoint apiEndpoint, CancellationToken token = default)
-        {
-            await UniTask.SwitchToThreadPool();
-            var statistic = GetApiEndpointStatistic(apiEndpoint);
-            if (statistic.IsUserLoggedIn is not true)
-            {
-                return null;
-            }
-            var url = apiEndpoint.Url.Combine(API_GET_USER_FAVCOLLECTION);
-            var rsp = default(EndpointResponse);
-
-            for (var i = 0; i < MajEnv.HTTP_REQUEST_MAX_RETRY; i++)
-            {
-                rsp = await GetAsync(url, token);
-                var e = default(Exception?);
-                if (rsp.IsSuccessfully && rsp.TryDeserialize<DanInfo[]>(out var danList, out e) && danList is not null)
-                {
-                    MajDebug.LogDebug(rsp);
-                    return danList;
-                }
-                else
-                {
-                    MajDebug.LogError(rsp);
-                    MajDebug.LogError($"Failed to get dan list: {e?.Message ?? "Unknown error"}");
-                }
-                if (rsp.ErrorCode == HttpErrorCode.Canceled)
-                {
-                    break;
-                }
-                else if (rsp.StatusCode == HttpStatusCode.Unauthorized)
-                {
-                    MajDebug.LogError($"Failed to get online dan list: user not logged in");
-                    using (await statistic.LockAsync(token))
-                    {
-                        statistic.IsUserLoggedIn = false;
-                    }
-                    break;
-                }
-                else if (!rsp.IsSuccessfully && rsp.StatusCode is not HttpStatusCode.OK)
-                {
-                    break;
-                }
-            }
-
-            return null;
-        }
-
-        public static async ValueTask<Sprite?> GetUserIconAsync(ApiEndpoint apiEndpoint,string username, CancellationToken token = default, Action<string, bool>? onError = null)
-        {
-            if(string.IsNullOrEmpty(username))
-            {
-                return null;
-            }
-            await UniTask.SwitchToThreadPool();
-            var url = apiEndpoint.Url.Combine(string.Format(API_GET_USER_ICON, username));
-            var statistic = GetApiEndpointStatistic(apiEndpoint);
-            for (var i = 0; i <= MajEnv.HTTP_REQUEST_MAX_RETRY; i++)
-            {
-                try
-                {
-                    var rsp = await GetAsync(url, token);
-                    if (!rsp.IsSuccessfully)
-                    {
-                        MajDebug.LogError("Failed to download user icon");
-                        MajDebug.LogError($"Url:{url}\nStatusCode:{rsp.StatusCode}\nErrorCode:{rsp.ErrorCode}\nMessage:{rsp.Message}");
-                        if (rsp.StatusCode is HttpStatusCode.Unauthorized)
-                        {
-                            using (await statistic.LockAsync(token))
-                            {
-                                statistic.IsUserLoggedIn = false;
-                            }
-                            return default;
-                        }
-                        await UniTask.SwitchToMainThread();
-                        onError?.Invoke("MAJTEXT_LOGIN_DOWNLOAD_AVATAR_FAILED_RETRIED_TIMES_{0}/{1}".i18n(i+1, MajEnv.HTTP_REQUEST_MAX_RETRY+1), true);
-                        await UniTask.SwitchToThreadPool();
-                        continue;
-                    }
-                    using (await statistic.LockAsync(token))
-                    {
-                        statistic.IsUserLoggedIn = true;
-                    }
-                    var avatar = await SpriteLoader.LoadAsync(rsp.AsMemory());
-                    return avatar;
-                }
-                catch (Exception e)
-                {
-                    MajDebug.LogError("Failed to download user icon");
-                    MajDebug.LogError(e);
-                }
-            }
-            return default;
-        }
-        public static void ClearResponseCache()
-        {
-            ref var @lock = ref _cachedResponseLock;
-            var isLocked = false;
-            try
-            {
-                @lock.Enter(ref isLocked);
-                _cachedResponse.Clear();
-            }
-            finally
-            {
-                if (isLocked)
-                {
-                    @lock.Exit();
-                }
-            }
-        }
-        #region Internal method
-        static async ValueTask<EndpointResponse<UserSummary>> GetUserInfoAsyncInternal(ApiEndpoint apiEndpoint, CancellationToken token = default)
-        {
-            var uri = apiEndpoint.Url.Combine(API_GET_USER_INFO);
-            var rsp = default(EndpointResponse);
-            for (var i = 0; i <= MajEnv.HTTP_REQUEST_MAX_RETRY; i++)
-            {
-                rsp = await GetAsync(uri, token);
-                if (rsp.StatusCode is HttpStatusCode.Unauthorized)
-                {
-                    return new EndpointResponse<UserSummary>(rsp);
-                }
-                else if (!rsp.IsSuccessfully || !rsp.IsDeserializable)
-                {
-                    MajDebug.LogError("Failed to get user info");
-                    MajDebug.LogError($"Url:{uri}\nStatusCode:{rsp.StatusCode}\nErrorCode:{rsp.ErrorCode}\nMessage:{rsp.Message}");
-                    continue;
-                }
-                return new EndpointResponse<UserSummary>(rsp);
-            }
-            return new EndpointResponse<UserSummary>(rsp);
-        }
-        static async ValueTask<EndpointResponse> GetAsync(Uri uri, CancellationToken token = default)
-        {
-#if ENABLE_IL2CPP || MAJDATA_IL2CPP_DEBUG
-            await UniTask.SwitchToMainThread();
-            var getReq = UnityWebRequestFactory.Get(uri);
-            var headers = default(IReadOnlyDictionary<string, IEnumerable<string>>);
-            try
-            {
-                var asyncOperation = getReq.SendWebRequest();
-                while (!asyncOperation.isDone)
-                {
-                    if (token.IsCancellationRequested)
-                    {
-                        getReq.Abort();
-                        throw new HttpException(uri.OriginalString, HttpErrorCode.Canceled);
-                    }
-                    await UniTask.Yield();
-                }
-                headers = getReq.GetResponseHeaders()?.GroupBy(x => x.Key)
-                                                      .ToDictionary(x => x.Key, x => x.Select(x => x.Value).AsEnumerable());
-                getReq.EnsureSuccessStatusCode();
-                var nativeBuffer = getReq.downloadHandler.nativeData;
-                var buffer = Array.Empty<byte>();
-                if(nativeBuffer.Length != 0)
-                {
-                    buffer = new byte[nativeBuffer.Length];
-                    nativeBuffer.CopyTo(buffer);
-                }
-
-                return new EndpointResponse(buffer, _defaultJsonSerializer, _defaultJsonSerializerSettings)
-                {
-                    IsSuccessfully = true,
-                    IsDeserializable = true && buffer.Length != 0,
-                    ErrorCode = default,
-                    StatusCode = (HttpStatusCode)getReq.responseCode,
-                    Message = "",
-                    Headers = headers ?? EndpointResponse.EMPTY_HEADERS,
-                };
-            }
-            catch (HttpException httpE)
-            {
-                MajDebug.LogException(httpE);
-                return new EndpointResponse(Array.Empty<byte>(), _defaultJsonSerializer, _defaultJsonSerializerSettings)
-                {
-                    IsSuccessfully = false,
-                    IsDeserializable = false,
-                    ErrorCode = httpE.ErrorCode,
-                    StatusCode = httpE.StatusCode,
-                    Message = httpE.Message,
-                    Headers = headers ?? EndpointResponse.EMPTY_HEADERS,
-                };
-            }
-            catch(Exception e)
-            {
-                MajDebug.LogException(e);
-                return new EndpointResponse(Array.Empty<byte>(), _defaultJsonSerializer, _defaultJsonSerializerSettings)
-                {
-                    IsSuccessfully = false,
-                    IsDeserializable = false,
-                    ErrorCode = HttpErrorCode.Unreachable,
-                    StatusCode = null,
-                    Message = e.ToString(),
-                    Headers = headers ?? EndpointResponse.EMPTY_HEADERS,
-                };
-            }
-#else
-            try
-            {
-                var client = MajEnv.SharedHttpClient;
-                var rsp = await client.GetAsync(uri, token);
-                if (rsp.StatusCode != HttpStatusCode.OK)
-                {
-                    return new EndpointResponse(Array.Empty<byte>(), _defaultJsonSerializer, _defaultJsonSerializerSettings)
-                    {
-                        IsSuccessfully = false,
-                        IsDeserializable = false,
-                        ErrorCode = HttpErrorCode.Unsuccessful,
-                        StatusCode = rsp.StatusCode,
-                        Headers = rsp.Headers.ToDictionary(kv => kv.Key, kv => kv.Value),
-                        Message = ""
-                    };
-                }
-                var buffer = await rsp.Content.ReadAsByteArrayAsync();
-                return new EndpointResponse(buffer, _defaultJsonSerializer, _defaultJsonSerializerSettings)
-                {
-                    IsSuccessfully = true,
-                    IsDeserializable = true,
-                    ErrorCode = HttpErrorCode.NoError,
-                    StatusCode = rsp.StatusCode,
-                    Headers = rsp.Headers.ToDictionary(kv => kv.Key, kv => kv.Value),
-                    Message = "Ok"
-                };
-            }
-            catch (OperationCanceledException)
-            {
-                var errorCode = HttpErrorCode.Timeout;
-                if (token.IsCancellationRequested)
-                {
-                    errorCode = HttpErrorCode.Canceled;
-                }
-                return new EndpointResponse(Array.Empty<byte>(), _defaultJsonSerializer, _defaultJsonSerializerSettings)
-                {
-                    IsSuccessfully = false,
-                    IsDeserializable = false,
-                    ErrorCode = errorCode,
-                    StatusCode = null,
-                    Message = ""
-                };
-            }
-            catch (Exception e)
-            {
-                MajDebug.LogException(e);
-                return new EndpointResponse(Array.Empty<byte>(), _defaultJsonSerializer, _defaultJsonSerializerSettings)
-                {
-                    IsSuccessfully = false,
-                    IsDeserializable = false,
-                    ErrorCode = HttpErrorCode.Unreachable,
-                    StatusCode = null,
-                    Message = e.ToString()
-                };
-            }
-#endif
-        }
-
-
-#if ENABLE_IL2CPP || MAJDATA_IL2CPP_DEBUG
-        static async ValueTask<EndpointResponse> PostAsync(Uri uri, WWWForm? form = null, CancellationToken token = default)
-        {
-            await using (UniTask.ReturnToCurrentSynchronizationContext())
-            {
-                await UniTask.SwitchToMainThread();
-                var getReq = UnityWebRequestFactory.Post(uri, form);
-                var headers = default(IReadOnlyDictionary<string, IEnumerable<string>>);
-                try
-                {
-                    var asyncOperation = getReq.SendWebRequest();
-                    while (!asyncOperation.isDone)
-                    {
-                        if (token.IsCancellationRequested)
-                        {
-                            getReq.Abort();
-                            throw new HttpException(uri.OriginalString, HttpErrorCode.Canceled);
-                        }
-                        await UniTask.Yield();
-                    }
-                    headers = getReq.GetResponseHeaders()?.GroupBy(x => x.Key)
-                                                          .ToDictionary(x => x.Key, x => x.Select(x => x.Value).AsEnumerable());
-                    getReq.EnsureSuccessStatusCode();
-                    var nativeBuffer = getReq.downloadHandler.nativeData;
-                    var buffer = Array.Empty<byte>();
-                    if (nativeBuffer.Length != 0)
-                    {
-                        buffer = new byte[nativeBuffer.Length];
-                        nativeBuffer.CopyTo(buffer);
-                    }
-                    return new EndpointResponse(buffer, _defaultJsonSerializer, _defaultJsonSerializerSettings)
-                    {
-                        IsSuccessfully = true,
-                        IsDeserializable = true && buffer.Length != 0,
-                        ErrorCode = default,
-                        StatusCode = (HttpStatusCode)getReq.responseCode,
-                        Message = "",
-                        Headers = headers ?? EndpointResponse.EMPTY_HEADERS
-                    };
-                }
-                catch (HttpException httpE)
-                {
-                    MajDebug.LogException(httpE);
-                    return new EndpointResponse(Array.Empty<byte>(), _defaultJsonSerializer, _defaultJsonSerializerSettings)
-                    {
-                        IsSuccessfully = false,
-                        IsDeserializable = false,
-                        ErrorCode = httpE.ErrorCode,
-                        StatusCode = httpE.StatusCode,
-                        Message = httpE.Message,
-                        Headers = headers ?? EndpointResponse.EMPTY_HEADERS
-                    };
-                }
-                catch (Exception e)
-                {
-                    MajDebug.LogException(e);
-                    return new EndpointResponse(Array.Empty<byte>(), _defaultJsonSerializer, _defaultJsonSerializerSettings)
-                    {
-                        IsSuccessfully = false,
-                        IsDeserializable = false,
-                        ErrorCode = HttpErrorCode.Unreachable,
-                        StatusCode = null,
-                        Message = e.ToString(),
-                        Headers = headers ?? EndpointResponse.EMPTY_HEADERS
-                    };
-                }
-            }
-        }
-        static async ValueTask<EndpointResponse> PostAsync(Uri uri, string content, string contentType, CancellationToken token = default)
-        {
-            await using (UniTask.ReturnToCurrentSynchronizationContext())
-            {
-                await UniTask.SwitchToMainThread();
-                var getReq = UnityWebRequestFactory.Post(uri, content, contentType);
-                var headers = default(IReadOnlyDictionary<string, IEnumerable<string>>);
-                try
-                {
-                    var asyncOperation = getReq.SendWebRequest();
-                    while (!asyncOperation.isDone)
-                    {
-                        if (token.IsCancellationRequested)
-                        {
-                            getReq.Abort();
-                            throw new HttpException(uri.OriginalString, HttpErrorCode.Canceled);
-                        }
-                        await UniTask.Yield();
-                    }
-                    headers = getReq.GetResponseHeaders()?.GroupBy(x => x.Key)
-                                                          .ToDictionary(x => x.Key, x => x.Select(x => x.Value).AsEnumerable());
-                    getReq.EnsureSuccessStatusCode();
-                    var nativeBuffer = getReq.downloadHandler.nativeData;
-                    var buffer = Array.Empty<byte>();
-                    if (nativeBuffer.Length != 0)
-                    {
-                        buffer = new byte[nativeBuffer.Length];
-                        nativeBuffer.CopyTo(buffer);
-                    }
-
-                    return new EndpointResponse(buffer, _defaultJsonSerializer, _defaultJsonSerializerSettings)
-                    {
-                        IsSuccessfully = true,
-                        IsDeserializable = true && buffer.Length != 0,
-                        ErrorCode = default,
-                        StatusCode = (HttpStatusCode)getReq.responseCode,
-                        Message = "",
-                        Headers = headers ?? EndpointResponse.EMPTY_HEADERS
-                    };
-                }
-                catch (HttpException httpE)
-                {
-                    MajDebug.LogException(httpE);
-                    return new EndpointResponse(Array.Empty<byte>(), _defaultJsonSerializer, _defaultJsonSerializerSettings)
-                    {
-                        IsSuccessfully = false,
-                        IsDeserializable = false,
-                        ErrorCode = httpE.ErrorCode,
-                        StatusCode = httpE.StatusCode,
-                        Message = httpE.Message,
-                        Headers = headers ?? EndpointResponse.EMPTY_HEADERS
-                    };
-                }
-                catch (Exception e)
-                {
-                    MajDebug.LogException(e);
-                    return new EndpointResponse(Array.Empty<byte>(), _defaultJsonSerializer, _defaultJsonSerializerSettings)
-                    {
-                        IsSuccessfully = false,
-                        IsDeserializable = false,
-                        ErrorCode = HttpErrorCode.Unreachable,
-                        StatusCode = null,
-                        Message = e.ToString(),
-                        Headers = headers ?? EndpointResponse.EMPTY_HEADERS
-                    };
-                }
-            }
-        }
-#else
-        static ValueTask<EndpointResponse> PostAsync(Uri uri, CancellationToken token = default)
-        {
-            return PostAsync(uri, (HttpContent?)null, token);
-        }
-        static ValueTask<EndpointResponse> PostAsync(Uri uri, string content, CancellationToken token = default)
-        {
-            return PostAsync(uri, new StringContent(content), token);
-        }
-        static ValueTask<EndpointResponse> PostAsync(Uri uri, byte[] content, CancellationToken token = default)
-        {
-            return PostAsync(uri, new ByteArrayContent(content), token);
-        }
-        static ValueTask<EndpointResponse> PostAsync(Uri uri, ArraySegment<byte> content, CancellationToken token = default)
-        {
-            return PostAsync(uri, new ByteArrayContent(content.Array, content.Offset, content.Count), token);
-        }
-        static async ValueTask<EndpointResponse> PostAsync(Uri uri, HttpContent? content, CancellationToken token = default)
-        {
-            try
-            {
-                var client = MajEnv.SharedHttpClient;
-                var rsp = await (content is null ? client.PostAsync(uri, new StringContent(string.Empty, Encoding.UTF8, "application/json"), token) : client.PostAsync(uri, content, token));
-                var buffer = await rsp.Content.ReadAsByteArrayAsync();
-                return new EndpointResponse(buffer, _defaultJsonSerializer, _defaultJsonSerializerSettings) 
-                { 
-                    IsSuccessfully = rsp.StatusCode == HttpStatusCode.OK, 
-                    IsDeserializable = rsp.StatusCode == HttpStatusCode.OK,
-                    ErrorCode = rsp.StatusCode == HttpStatusCode.OK ? HttpErrorCode.NoError : HttpErrorCode.Unsuccessful,
-                    StatusCode = rsp.StatusCode,
-                    Headers = rsp.Headers.ToDictionary(kv => kv.Key, kv => kv.Value),
-                    Message = rsp.StatusCode == HttpStatusCode.OK ? "Ok" : ""
-                };
-            }
-            catch (OperationCanceledException)
-            {
-                var errorCode = HttpErrorCode.Timeout;
-                if (token.IsCancellationRequested)
-                {
-                    errorCode = HttpErrorCode.Canceled;
-                }
-                return new EndpointResponse(Array.Empty<byte>(), _defaultJsonSerializer, _defaultJsonSerializerSettings)
-                {
-                    IsSuccessfully = false,
-                    IsDeserializable = false,
-                    ErrorCode = errorCode,
-                    StatusCode = null,
-                    Message = ""
-                };
-            }
-            catch (Exception e)
-            {
-                MajDebug.LogException(e);
-                return new EndpointResponse(Array.Empty<byte>(), _defaultJsonSerializer, _defaultJsonSerializerSettings)
-                {
-                    IsSuccessfully = false,
-                    IsDeserializable = false,
-                    ErrorCode = HttpErrorCode.Unreachable,
-                    StatusCode = null,
-                    Message = e.ToString()
-                };
-            }
-        }
-#endif
-
-        static Uri BuildMaiChartUri(ApiEndpoint endpoint, string template, string chartId)
-        {
-            return BuildMaiChartUri(endpoint, template, Guid.Parse(chartId));
-        }
-        static Uri BuildMaiChartUri(ApiEndpoint endpoint, string template, Guid chartId)
-        {
-            using var sb = ZString.CreateStringBuilder(true);
-            sb.AppendFormat(template, chartId);
-
-            return new Uri(endpoint.Url, sb.ToString());
-        }
-
-        static ApiEndpointStatistics GetApiEndpointStatistic(ApiEndpoint endpoint)
+        /// <summary>Gets the state of an endpoint, creating it on first access.</summary>
+        /// <param name="endpoint">The endpoint.</param>
+        /// <returns>The state of the endpoint.</returns>
+        private static ApiEndpointStatistics GetApiEndpointStatistic(ApiEndpoint endpoint)
         {
             ref var @lock = ref _dictLock;
             var isLocked = false;
@@ -1197,19 +336,17 @@ namespace MajdataPlay.Net
                 }
             }
         }
-        static CachedApiEndpointResponse GetCachedResponse(OnlineSongDetail songDetail)
+        /// <summary>Gets the state of an endpoint without creating it.</summary>
+        /// <param name="endpoint">The endpoint.</param>
+        /// <returns>The state of the endpoint, or null when it was never accessed.</returns>
+        private static ApiEndpointStatistics? FindApiEndpointStatistic(ApiEndpoint endpoint)
         {
-            ref var @lock = ref _cachedResponseLock;
+            ref var @lock = ref _dictLock;
             var isLocked = false;
             try
             {
                 @lock.Enter(ref isLocked);
-                if (!_cachedResponse.TryGetValue(songDetail, out var cachedResponse))
-                {
-                    cachedResponse = new CachedApiEndpointResponse();
-                    _cachedResponse[songDetail] = cachedResponse;
-                }
-                return cachedResponse;
+                return _endpointStatistics.TryGetValue(endpoint, out var stats) ? stats : null;
             }
             finally
             {
@@ -1219,7 +356,10 @@ namespace MajdataPlay.Net
                 }
             }
         }
-        static int GetAllApiEndpointStatistic(IList<ApiEndpointStatistics> buffer)
+        /// <summary>Copies the state of every endpoint that was accessed.</summary>
+        /// <param name="buffer">The list receiving the states.</param>
+        /// <returns>The number of states added.</returns>
+        private static int GetAllApiEndpointStatistic(IList<ApiEndpointStatistics> buffer)
         {
             ref var @lock = ref _dictLock;
             var isLocked = false;
@@ -1243,42 +383,19 @@ namespace MajdataPlay.Net
             }
         }
         #endregion
-        class ReadOnlyApiEndpointStatistics
-        {
-            public bool IsMachineRegistered
-            {
-                get
-                {
-                    return _endpointStatistics.IsMachineRegistered ?? false;
-                }
-            }
-            public bool IsUserLoggedIn
-            {
-                get
-                {
-                    return _endpointStatistics.IsUserLoggedIn ?? false;
-                }
-            }
-            public bool IsMachineRegistrationSupported
-            {
-                get
-                {
-                    return _endpointStatistics.IsMachineRegistrationSupported ?? false;
-                }
-            }
 
-            readonly ApiEndpointStatistics _endpointStatistics;
-
-            ReadOnlyApiEndpointStatistics(ApiEndpointStatistics statistics)
-            {
-                _endpointStatistics = statistics;
-            }
-        }
-        class ApiEndpointStatistics
+        /// <summary>The login and machine registration state of an endpoint; null while unknown.</summary>
+        private class ApiEndpointStatistics
         {
+            /// <summary>Gets the endpoint.</summary>
             public required ApiEndpoint Endpoint { get; init; }
 
+            /// <summary>Gets or sets whether the machine is registered on the endpoint.</summary>
             public bool? IsMachineRegistered { get; set; }
+            /// <summary>
+            /// Gets or sets whether the user is logged in; logging out also clears the user shown for the endpoint, and any
+            /// change drops the cached responses.
+            /// </summary>
             public bool? IsUserLoggedIn
             {
                 get
@@ -1291,49 +408,33 @@ namespace MajdataPlay.Net
                     {
                         Endpoint.RuntimeConfig.Avatar = null;
                         Endpoint.RuntimeConfig.Username = string.Empty;
+                        Endpoint.RuntimeConfig.Nickname = string.Empty;
                     }
                     Endpoint.RuntimeConfig.IsLoggedIn = value ?? false;
+                    if (_isUserLoggedIn != value)
+                    {
+                        // Cached counts and comments carry the votes of the user who read them.
+                        ClearResponseCache();
+                    }
                     _isUserLoggedIn = value;
                 }
             }
+            /// <summary>Gets or sets whether the endpoint provides machine registration.</summary>
             public bool? IsMachineRegistrationSupported { get; set; }
 
-            bool? _isUserLoggedIn;
+            /// <summary>The backing field of <see cref="IsUserLoggedIn"/>.</summary>
+            private bool? _isUserLoggedIn;
 
-            readonly AsyncLock _lock = new ();
+            /// <summary>Serializes the requests that change the state.</summary>
+            private readonly AsyncLock _lock = new();
 
-            public IDisposable Lock()
-            {
-                return _lock.Lock();
-            }
+            /// <summary>Waits for exclusive access to the state.</summary>
+            /// <param name="token">The token canceling the wait.</param>
+            /// <returns>A task returning the lease, which releases the access when disposed.</returns>
             public AwaitableDisposable<IDisposable> LockAsync(CancellationToken token = default)
             {
                 return _lock.LockAsync(token);
             }
-        }
-        readonly struct NetMachineInfo
-        {
-            public string Id { get; init; }
-            public string Name { get; init; }
-            public string Description { get; init; }
-            public string Place { get; init; }
-        }
-        class CachedApiEndpointResponse
-        {
-            public CachedInteractResponse Interact { get; init; } = new();
-            public CachedScoreInfoResponse ScoreInfo { get; init; } = new();
-        }
-        class CachedInteractResponse
-        {
-            public MajNetSongInteract Response { get; set; }
-            public AsyncLock RequestLock { get; init; } = new ();
-            public DateTime LastActive { get; set; }
-        }
-        class CachedScoreInfoResponse
-        {
-            public MajNetSongScoreInfo Response { get; set; }
-            public AsyncLock RequestLock { get; init; } = new();
-            public DateTime LastActive { get; set; }
         }
     }
 }

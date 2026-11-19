@@ -16,6 +16,7 @@ namespace Live2D.Cubism.Editor.Inspectors
     internal sealed class PortfolioPartBlendColorEditorInspector : UnityEditor.Editor
     {
         private SerializedProperty childDrawableRenderers;
+        private SerializedProperty childParts;
 
         #region Editor
 
@@ -37,39 +38,48 @@ namespace Live2D.Cubism.Editor.Inspectors
             {
                 childDrawableRenderers = serializedObject.FindProperty("_childDrawableRenderers");
             }
+            if (childParts == null)
+            {
+                childParts = serializedObject.FindProperty("_childParts");
+            }
 
             if (childDrawableRenderers != null)
             {
                 // Show renderers.
                 EditorGUILayout.PropertyField(childDrawableRenderers);
             }
+            if (childParts != null)
+            {
+                // Show parts.
+                EditorGUILayout.PropertyField(childParts);
+            }
 
             EditorGUI.BeginChangeCheck();
 
-            // Display OverwriteColorForPartMultiplyColors.
+            // Display PartMultiplyColorEnabled.
             using (var scope = new EditorGUI.ChangeCheckScope())
             {
-                var overwriteColorForPartMultiplyColors = EditorGUILayout.Toggle("OverwriteColorForPartMultiplyColors", blendColorEditor.OverwriteColorForPartMultiplyColors);
+                var overrideColorForPartMultiplyColors = EditorGUILayout.Toggle("PartMultiplyColorEnabled", blendColorEditor.PartMultiplyColorEnabled);
 
                 if (scope.changed)
                 {
                     foreach (CubismPartColorsEditor partBlendColorEditor in targets)
                     {
-                        partBlendColorEditor.OverwriteColorForPartMultiplyColors = overwriteColorForPartMultiplyColors;
+                        partBlendColorEditor.PartMultiplyColorEnabled = overrideColorForPartMultiplyColors;
                     }
                 }
             }
 
-            // Display OverwriteColorForPartScreenColors.
+            // Display PartScreenColorEnabled.
             using (var scope = new EditorGUI.ChangeCheckScope())
             {
-                var overwriteColorForPartScreenColors = EditorGUILayout.Toggle("OverwriteColorForPartScreenColors", blendColorEditor.OverwriteColorForPartScreenColors);
+                var overrideColorForPartScreenColors = EditorGUILayout.Toggle("PartScreenColorEnabled", blendColorEditor.PartScreenColorEnabled);
 
                 if (scope.changed)
                 {
                     foreach (CubismPartColorsEditor partBlendColorEditor in targets)
                     {
-                        partBlendColorEditor.OverwriteColorForPartScreenColors = overwriteColorForPartScreenColors;
+                        partBlendColorEditor.PartScreenColorEnabled = overrideColorForPartScreenColors;
                     }
                 }
             }

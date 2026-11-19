@@ -1,70 +1,155 @@
 using Cysharp.Text;
 using Cysharp.Threading.Tasks;
-using MajdataPlay.Collections;
+using LitMotion;
+using LitMotion.Extensions;
+using MajdataPlay.Diagnostics;
 using MajdataPlay.IO;
-using MajdataPlay.Utils;
+using MajdataPlay.Rendering;
 using System;
+using System.Collections.Generic;
+using System.Linq;
 using System.Threading.Tasks;
 using TMPro;
 using UnityEngine;
 using UnityEngine.SceneManagement;
-using UnityEngine.Scripting;
+using UnityEngine.Serialization;
 using UnityEngine.UI;
-using UnityEngine.Video;
 #nullable enable
 namespace MajdataPlay
 {
-    internal sealed partial class SceneSwitcher : MajSingleton, IMainCameraProvider
+    [DontDestroyOnLoad]
+    public sealed partial class SceneSwitcher : MajComponent
     {
-        public Camera MainCamera 
-        { 
-            get; 
-            private set; 
+        public static Camera MainCamera
+        {
+            get => _mainCamera;
+            set => _mainCamera = value;
         }
+
         public static event EventHandler<(MajScenes NewScene, MajScenes OldScene)>? OnSceneChanged;
         public static MajScenes CurrentScene { get; private set; } = MajScenes.Init;
         public static MajScenes LastScene { get; private set; } = MajScenes.Init;
 
-        Canvas _canvas;
-        Animator animator;
-        public Image SubImage;
-        public Image MainImage;
-        public TMP_Text loadingText;
-        public Color LoadingLightColor;
+        private Canvas _canvas;
 
         [SerializeField]
-        VideoPlayer _videoPlayer;
+        [FormerlySerializedAs("SubImage")]
+        private Image _subImage;
+
         [SerializeField]
-        SpriteRenderer _mvRenderer;
-        GameObject _bgObject;
+        [FormerlySerializedAs("OverlayImage")]
+        private Image _overlayImage;
 
-        readonly string[] SCENE_NAMES = Enum.GetNames(typeof(MajScenes));
+        [SerializeField]
+        [FormerlySerializedAs("MainImage")]
+        private Image _mainImage;
 
-        const int SWITCH_ELAPSED_MS = 400;
-        const int AUTO_FADE_OUT_DELAY_MS = 50;
+        [SerializeField]
+        [FormerlySerializedAs("loadingText")]
+        private TMP_Text _loadingText;
+
+        [SerializeField]
+        [FormerlySerializedAs("LoadingLightColor")]
+        private Color _loadingLightColor;
+
+        [Header("Transition Animation")]
+        [SerializeField]
+        private RectTransform _mainMaskRect;
+        [SerializeField, Min(1f)]
+        private float _coveredMaskSize = 1080f;
+        [SerializeField, Min(0.01f)]
+        private float _closeDuration = 0.9f;
+        [SerializeField, Min(0.01f)]
+        private float _openDuration = 0.8f;
+        [SerializeField, Range(6, 24)]
+        private int _triangleColumns = 12;
+        [SerializeField, Range(0.2f, 0.4f)]
+        private float _triangleFadeSpan = 0.2f;
+        [SerializeField, Range(-30f, 30f)]
+        private float _triangleGridRotation;
+        [SerializeField, Range(0f, 180f)]
+        private float _triangleSpinDegrees = 90f;
+
+        private MotionHandle _maskMotion;
+        private MotionHandle _overlayImageMotion;
+        private MotionHandle _mainImageMotion;
+        private MotionHandle _loadingTextMotion;
+        [Header("Transition Rendering")]
+        [SerializeField]
+        private Canvas _transitionOverlayCanvas = null!;
+        private Graphic[] _maskDecorations = Array.Empty<Graphic>();
+        /// <summary>Retains only explicitly bound transition modifiers for paired cleanup.</summary>
+        private readonly List<UiTransitionOverlay> _transitionOverlays = new();
+        private float _maskProgress;
+        private bool _isClosingTransition;
+
+        private static Camera _mainCamera;
+
+        private readonly string[] SCENE_NAMES = Enum.GetNames(typeof(MajScenes));
+
+        private const int AUTO_FADE_OUT_DELAY_MS = 50;
+        private const float CLOSE_CONTENT_START_SCALE = 1.015f;
+        private const float OPEN_CONTENT_END_SCALE = 1.01f;
+        private const float OVERLAY_IMAGE_DELAY_SEC = 0.05f;
+        private const float LOADING_TEXT_FADE_DURATION_SEC = 0.2f;
+        private static readonly int TRIANGLE_COLUMNS_ID = Shader.PropertyToID("_MajSceneTriangleColumns");
+        private static readonly int TRIANGLE_FADE_SPAN_ID = Shader.PropertyToID("_MajSceneTriangleFadeSpan");
+        private static readonly int TRIANGLE_GRID_ROTATION_ID = Shader.PropertyToID("_MajSceneTriangleGridRotation");
+        private static readonly int TRIANGLE_SPIN_DEGREES_ID = Shader.PropertyToID("_MajSceneTriangleSpinDegrees");
+        private static readonly int TRIANGLE_CLOSING_ID = Shader.PropertyToID("_MajSceneTriangleClosing");
+        private static readonly int TRANSITION_PROGRESS_ID = Shader.PropertyToID("_MajSceneTransitionProgress");
         protected override void Awake()
         {
             base.Awake();
-            Majdata<IMainCameraProvider>.Instance = this;
+            Majdata<SceneSwitcher>.SetAsSingleton(this);
             SceneManager.activeSceneChanged += OnUnitySceneChanged;
             MainCamera = Camera.main;
             var currentScene = SceneManager.GetActiveScene();
             var index = Array.FindIndex(SCENE_NAMES, x => x == currentScene.name);
-            if(index != -1)
+            if (index != -1)
             {
                 CurrentScene = Enum.Parse<MajScenes>(SCENE_NAMES[index]);
             }
             _canvas = GetComponent<Canvas>();
-            animator = GetComponent<Animator>();
-            loadingText.gameObject.SetActive(false);
-            _bgObject = _videoPlayer.gameObject;
+            BindTransitionOverlay();
+            if (ResolveTransitionReferences())
+            {
+                // The game boots fully open. Init -> Title has no transition;
+                // the first Close is played when Title enters Login or List.
+                _isClosingTransition = false;
+                _maskProgress = 0f;
+                _mainMaskRect.sizeDelta = Vector2.one * _coveredMaskSize;
+                ConfigureTransitionShader();
+                SetMaskProgress(_maskProgress);
+                SetGraphicAlpha(_overlayImage, 0f);
+                _mainImage.rectTransform.localScale = Vector3.one * OPEN_CONTENT_END_SCALE;
+                _mainImage.gameObject.SetActive(false);
+            }
+            SetGraphicAlpha(_loadingText, 0f);
+            _loadingText.gameObject.SetActive(false);
         }
-        void OnUnitySceneChanged(Scene current, Scene next)
+        private void OnDestroy()
         {
-            //MajDebug.LogDebug(ZString.Format("Scene unloaded: {0}", current.name));
-            MajDebug.LogDebug(ZString.Format("Scene loaded: {0}", next.name));
-            MainCamera = Camera.main;
-            //var currentScene = SceneManager.GetActiveScene();
+            SceneManager.activeSceneChanged -= OnUnitySceneChanged;
+            CancelTransitionMotions();
+            foreach (var overlay in _transitionOverlays)
+            {
+                if (overlay != null)
+                {
+                    overlay.Unbind();
+                }
+            }
+            _transitionOverlays.Clear();
+            if (_transitionOverlayCanvas != null)
+            {
+                Destroy(_transitionOverlayCanvas.gameObject);
+            }
+        }
+
+        private void OnUnitySceneChanged(Scene current, Scene next)
+        {
+            InputManager.ResetUIInputForSceneChange();
+            MajDebug.LogInfo(nameof(SceneSwitcher), ZString.Format("Scene loaded: {0}", next.name));
             var index = Array.FindIndex(SCENE_NAMES, x => x == next.name);
             var lastScene = CurrentScene;
             if (index != -1)
@@ -72,12 +157,11 @@ namespace MajdataPlay
                 CurrentScene = Enum.Parse<MajScenes>(SCENE_NAMES[index]);
             }
             LastScene = lastScene;
-            if(OnSceneChanged is not null)
+            if (OnSceneChanged is not null)
             {
                 OnSceneChanged(this, (CurrentScene, LastScene));
             }
-            CabinetLight.SetLight(1.0f);
-            _canvas.worldCamera = MainCamera;
+            CabinetLed.SetCabinetLight(1.0f);
         }
 
         public void SwitchScene(string sceneName, bool autoFadeOut = true)
@@ -88,90 +172,84 @@ namespace MajdataPlay
         {
             return SwitchSceneInternal(sceneName, autoFadeOut);
         }
-        public void PauseMV()
-        {
-            _videoPlayer.Pause();
-        }
-        public void PlayMV()
-        {
-            _videoPlayer.Play();
-        }
-        public void StopMV()
-        {
-            _videoPlayer.Stop();
-        }
-        public void HideMV()
-        {
-            PauseMV();
-            _videoPlayer.enabled = false;
-            _mvRenderer.enabled = false;
-            _bgObject.layer = MajEnv.HIDDEN_LAYER;
-        }
-        public void ShowMV()
-        {
-            _mvRenderer.enabled = true;
-            _videoPlayer.enabled = true;
-            _bgObject.layer = MajEnv.DEFAULT_LAYER;
-            PlayMV();
-        }
         public void FadeOut()
         {
-            animator.SetBool("In", false);
-            loadingText.gameObject.SetActive(false);
-            LedRing.SetAllLight(Color.white);
-            CabinetLight.SetLight(1.0f);
+            StartTransition(false);
+            CabinetLed.SetAllLight(Color.white);
+            CabinetLed.SetCabinetLight(1.0f);
         }
         public async UniTask FadeOutAsync()
         {
-            animator.SetBool("In", false);
-            await UniTask.Delay(SWITCH_ELAPSED_MS);
-            loadingText.gameObject.SetActive(false);
-            LedRing.SetAllLight(Color.white);
-            CabinetLight.SetLight(1.0f);
+            await PlayTransitionAsync(false);
+            CabinetLed.SetAllLight(Color.white);
+            CabinetLed.SetCabinetLight(1.0f);
         }
         public void FadeIn()
         {
-            animator.SetBool("In", true);
-            loadingText.text = string.Empty;
-            loadingText.gameObject.SetActive(true);
-            LedRing.SetAllLight(LoadingLightColor);
-            CabinetLight.SetLight(0.5f);
+            _loadingText.text = string.Empty;
+            _loadingText.gameObject.SetActive(true);
+            StartTransition(true);
+            CabinetLed.SetAllLight(_loadingLightColor);
+            CabinetLed.SetCabinetLight(0.5f);
         }
         public async UniTask FadeInAsync()
         {
-            animator.SetBool("In", true);
-            await UniTask.Delay(SWITCH_ELAPSED_MS);
-            loadingText.text = string.Empty;
-            loadingText.gameObject.SetActive(true);
-            LedRing.SetAllLight(LoadingLightColor);
-            CabinetLight.SetLight(0.5f);
+            _loadingText.text = string.Empty;
+            _loadingText.gameObject.SetActive(true);
+            await PlayTransitionAsync(true);
+            CabinetLed.SetAllLight(_loadingLightColor);
+            CabinetLed.SetCabinetLight(0.5f);
         }
-        public void SetLoadingText(string text , Color color)
+        public void SetLoadingText(string text, Color color)
         {
-            loadingText.text = text;
-            loadingText.color = color;
+            _loadingText.text = text;
+            _loadingText.color = color;
         }
         public void SetLoadingText(string text)
         {
-            loadingText.text = text;
-            loadingText.color = Color.white;
+            _loadingText.text = text;
+            _loadingText.color = Color.white;
         }
 
-        async UniTask SwitchSceneInternal(string sceneName, bool autoFadeOut)
+        private async UniTask SwitchSceneInternal(string sceneName, bool autoFadeOut)
         {
             InputManager.ClearAllSubscriber();
-            SubImage.sprite = MajInstances.SkinManager.SelectedSkin.SubDisplay;
+            UpdateBGSprite();
             //MainImage.sprite = MajInstances.SkinManager.SelectedSkin.LoadingSplash;
-            loadingText.text = "";
-            loadingText.gameObject.SetActive(true);
-            animator.SetBool("In", true);
-            await UniTask.Delay(SWITCH_ELAPSED_MS);
-            LedRing.SetAllLight(LoadingLightColor);
-            CabinetLight.SetLight(0.5f);
+            _loadingText.text = "";
+            _loadingText.gameObject.SetActive(true);
+            await PlayTransitionAsync(true);
+            CabinetLed.SetAllLight(_loadingLightColor);
+            CabinetLed.SetCabinetLight(0.5f);
             await SwitchSceneCoreAsync(sceneName, autoFadeOut);
         }
-        async UniTask SwitchSceneCoreAsync(string sceneName, bool autoFadeOut)
+        private async UniTask SwitchSceneCoreAsync(string sceneName, bool autoFadeOut)
         {
+            if (sceneName == nameof(MajScenes.Game))
+            {
+                SetLoadingText("MAJTEXT_COMPILING_SHADERS".i18n());
+#if UNITY_ANDROID && !UNITY_EDITOR
+                try
+                {
+                    var cancellationToken = this.GetCancellationTokenOnDestroy();
+                    await UniTask.WaitForEndOfFrame(cancellationToken);
+                    await AndroidGraphicsStateWarmup.WarmUpAsync(cancellationToken);
+                }
+                finally
+                {
+                    if (this != null)
+                    {
+                        SetLoadingText(string.Empty);
+                    }
+                }
+#else
+                // Render the loading message before shader warmup blocks the main thread.
+                await UniTask.WaitForEndOfFrame();
+                //Shader.WarmupAllShaders();
+                SetLoadingText(string.Empty);
+#endif
+            }
+
             //await SceneManager.UnloadSceneAsync(SceneManager.GetActiveScene());
             //await Resources.UnloadUnusedAssets();
             await SceneManager.LoadSceneAsync(sceneName);
@@ -179,23 +257,252 @@ namespace MajdataPlay
             await UniTask.Delay(AUTO_FADE_OUT_DELAY_MS);
             if (autoFadeOut)
             {
-                animator.SetBool("In", false);
-                LedRing.SetAllLight(Color.white);
-                CabinetLight.SetLight(1.0f);
-                loadingText.gameObject.SetActive(false);
+                StartTransition(false);
+                CabinetLed.SetAllLight(Color.white);
+                CabinetLed.SetCabinetLight(1.0f);
             }
         }
+
+        private bool ResolveTransitionReferences()
+        {
+            if (_mainMaskRect == null && _mainImage != null)
+            {
+                _mainMaskRect = _mainImage.rectTransform.parent as RectTransform;
+            }
+            if (_mainMaskRect != null)
+            {
+                _maskDecorations = _mainMaskRect
+                    .GetComponentsInChildren<Graphic>(true)
+                    .Where(graphic => graphic != _mainImage)
+                    .ToArray();
+            }
+            var resolved = _mainMaskRect != null
+                && _mainImage != null
+                && _overlayImage != null
+                && _loadingText != null;
+            if (resolved)
+            {
+                BindTransitionGraphic(_mainImage);
+                BindTransitionGraphic(_overlayImage);
+                BindTransitionGraphic(_loadingText);
+                foreach (var decoration in _maskDecorations)
+                {
+                    BindTransitionGraphic(decoration);
+                }
+            }
+            return resolved;
+        }
+
+        /// <summary>Binds only artwork that actually participates in the transition, never the legacy sub-display background.</summary>
+        /// <param name="graphic">The explicitly referenced transition image, decoration or loading label.</param>
+        private void BindTransitionGraphic(Graphic graphic)
+        {
+            if (graphic == null || graphic == _subImage)
+            {
+                return;
+            }
+            var overlay = UiTransitionOverlay.Ensure(graphic);
+            if (!_transitionOverlays.Contains(overlay))
+            {
+                _transitionOverlays.Add(overlay);
+            }
+        }
+
+        /// <summary>Validates optional dedicated-Canvas ownership after binding the actual transition graphics.</summary>
+        private void BindTransitionOverlay()
+        {
+            if (!ResolveTransitionReferences())
+            {
+                MajDebug.LogError("Scene transition overlay is not configured.");
+                return;
+            }
+
+            if (_transitionOverlayCanvas != null && _mainMaskRect.GetComponentInParent<Canvas>() != _transitionOverlayCanvas)
+            {
+                MajDebug.LogError("Scene transition UI is not serialized under the configured overlay canvas.");
+            }
+        }
+
+        private void CancelTransitionMotions()
+        {
+            _maskMotion.TryCancel();
+            _overlayImageMotion.TryCancel();
+            _mainImageMotion.TryCancel();
+            _loadingTextMotion.TryCancel();
+        }
+        private bool StartTransition(bool closing)
+        {
+            if (!ResolveTransitionReferences())
+            {
+                MajDebug.LogWarning("Scene transition preview is missing its mask or image references.");
+                return false;
+            }
+
+            CancelTransitionMotions();
+            _isClosingTransition = closing;
+            var targetProgress = closing ? 1f : 0f;
+            if (Mathf.Approximately(_maskProgress, targetProgress))
+            {
+                ApplyTransitionState(closing);
+                return false;
+            }
+
+            _mainImage.gameObject.SetActive(true);
+            if (closing)
+            {
+                _loadingText.gameObject.SetActive(true);
+            }
+            _mainMaskRect.sizeDelta = Vector2.one * _coveredMaskSize;
+            ConfigureTransitionShader();
+            SetMaskProgress(_maskProgress);
+
+            if (closing && _maskProgress <= 0.001f)
+            {
+                _mainImage.rectTransform.localScale = Vector3.one * CLOSE_CONTENT_START_SCALE;
+            }
+
+            var duration = closing ? _closeDuration : _openDuration;
+            Action onComplete = closing ? ApplyClosedState : ApplyOpenState;
+            _maskMotion = LMotion.Create(_maskProgress, targetProgress, duration)
+                // A hard initial push followed by a pronounced brake. The fold
+                // shader uses raw local progress so this is the only speed curve.
+                .WithEase(Ease.OutQuint)
+                .WithOnComplete(onComplete)
+                .Bind(SetMaskProgress);
+
+            var targetAlpha = closing ? 1f : 0f;
+            _overlayImageMotion = LMotion.Create(_overlayImage.color.a, targetAlpha, Mathf.Max(0.01f, duration - OVERLAY_IMAGE_DELAY_SEC))
+                .WithDelay(OVERLAY_IMAGE_DELAY_SEC)
+                .WithEase(Ease.OutQuint)
+                .BindToColorA(_overlayImage);
+
+            var targetScale = Vector3.one * (closing ? 1f : OPEN_CONTENT_END_SCALE);
+            _mainImageMotion = LMotion.Create(_mainImage.rectTransform.localScale, targetScale, duration)
+                .WithEase(Ease.OutQuint)
+                .BindToLocalScale(_mainImage.rectTransform);
+
+            if (closing)
+            {
+                _loadingTextMotion = LMotion.Create(_loadingText.color.a, 1f, LOADING_TEXT_FADE_DURATION_SEC)
+                    .WithDelay(Mathf.Max(0f, duration - LOADING_TEXT_FADE_DURATION_SEC))
+                    .WithEase(Ease.OutQuint)
+                    .BindToColorA(_loadingText);
+            }
+            else
+            {
+                _loadingTextMotion = LMotion.Create(_loadingText.color.a, 0f, LOADING_TEXT_FADE_DURATION_SEC)
+                    .WithEase(Ease.OutQuint)
+                    .WithOnComplete(() => _loadingText.gameObject.SetActive(false))
+                    .BindToColorA(_loadingText);
+            }
+            return true;
+        }
+        private async UniTask PlayTransitionAsync(bool closing)
+        {
+            if (StartTransition(closing))
+            {
+                await _maskMotion;
+            }
+        }
+
+#if UNITY_EDITOR
+        public void PreviewTransition(bool closing)
+        {
+            if (!ResolveTransitionReferences())
+            {
+                Debug.LogWarning("SceneSwitcher preview requires MainImage, SubImage, and a parent mask RectTransform.", this);
+                return;
+            }
+
+            CancelTransitionMotions();
+            ApplyTransitionState(!closing);
+            StartTransition(closing);
+        }
+        public void FinishEditorPreview(bool closed)
+        {
+            CancelTransitionMotions();
+            ApplyTransitionState(closed);
+        }
+        public float GetEditorPreviewDuration(bool closing) => closing ? _closeDuration : _openDuration;
+#endif
+
+        private void ApplyClosedState() => ApplyTransitionState(true);
+        private void ApplyOpenState() => ApplyTransitionState(false);
+        private void ApplyTransitionState(bool closed)
+        {
+            _isClosingTransition = closed;
+            _mainImage.gameObject.SetActive(true);
+            _mainMaskRect.sizeDelta = Vector2.one * _coveredMaskSize;
+            ConfigureTransitionShader();
+            SetMaskProgress(closed ? 1f : 0f);
+            SetGraphicAlpha(_overlayImage, closed ? 1f : 0f);
+            _mainImage.rectTransform.localScale = Vector3.one * (closed ? 1f : OPEN_CONTENT_END_SCALE);
+            SetGraphicAlpha(_loadingText, closed ? 1f : 0f);
+            _loadingText.gameObject.SetActive(closed);
+            if (!closed)
+            {
+                _mainImage.gameObject.SetActive(false);
+            }
+        }
+
+        private void ConfigureTransitionShader()
+        {
+            Shader.SetGlobalFloat(TRIANGLE_COLUMNS_ID, Mathf.Clamp(_triangleColumns, 6, 24));
+            Shader.SetGlobalFloat(TRIANGLE_FADE_SPAN_ID, Mathf.Clamp(_triangleFadeSpan, 0.2f, 0.4f));
+            Shader.SetGlobalFloat(TRIANGLE_GRID_ROTATION_ID, _triangleGridRotation);
+            Shader.SetGlobalFloat(TRIANGLE_SPIN_DEGREES_ID, _triangleSpinDegrees);
+            Shader.SetGlobalFloat(TRIANGLE_CLOSING_ID, _isClosingTransition ? 1f : 0f);
+
+            SetGraphicAlpha(_mainImage, 1f);
+        }
+
+        private void SetMaskProgress(float progress)
+        {
+            _maskProgress = Mathf.Clamp01(progress);
+            Shader.SetGlobalFloat(TRANSITION_PROGRESS_ID, _maskProgress);
+            var decorationAlpha = Mathf.SmoothStep(0f, 1f, _maskProgress);
+            foreach (var decoration in _maskDecorations)
+            {
+                SetGraphicAlpha(decoration, decorationAlpha);
+            }
+        }
+
+        private void UpdateBGSprite()
+        {
+            var sprite = MajInstances.SkinManager?.SelectedSkin?.SubDisplay;
+            if (sprite == null)
+            {
+                var oColor = _overlayImage.color;
+                _overlayImage.color = new(0, 0, 0, oColor.a);
+                _subImage.color = Color.black;
+            }
+            else
+            {
+                _overlayImage.sprite = sprite;
+                _subImage.sprite = sprite;
+                var oColor = _overlayImage.color;
+                _overlayImage.color = new(1, 1, 1, oColor.a);
+                _subImage.color = Color.white;
+            }
+        }
+
+        private static void SetGraphicAlpha(Graphic graphic, float alpha)
+        {
+            var color = graphic.color;
+            color.a = alpha;
+            graphic.color = color;
+        }
     }
-    internal sealed partial class SceneSwitcher : MajSingleton
+    public sealed partial class SceneSwitcher
     {
         // Task
-        async UniTask SwitchSceneInternalAsync(string sceneName, Task taskToRun)
+        private async UniTask SwitchSceneInternalAsync(string sceneName, Task taskToRun)
         {
             InputManager.ClearAllSubscriber();
-            SubImage.sprite = MajInstances.SkinManager.SelectedSkin.SubDisplay;
+            UpdateBGSprite();
             //MainImage.sprite = MajInstances.SkinManager.SelectedSkin.LoadingSplash;
-            animator.SetBool("In", true);
-            await UniTask.Delay(SWITCH_ELAPSED_MS);
+            _loadingText.gameObject.SetActive(true);
+            await PlayTransitionAsync(true);
             while (!taskToRun.IsCompleted)
             {
                 await UniTask.Yield();
@@ -204,8 +511,8 @@ namespace MajdataPlay
             {
                 throw taskToRun.Exception;
             }
-            LedRing.SetAllLight(LoadingLightColor);
-            CabinetLight.SetLight(0.5f);
+            CabinetLed.SetAllLight(_loadingLightColor);
+            CabinetLed.SetCabinetLight(0.5f);
             await SwitchSceneCoreAsync(sceneName, true);
         }
         public async UniTaskVoid SwitchSceneAfterTaskAsync(string sceneName, Task taskToRun)
@@ -213,23 +520,23 @@ namespace MajdataPlay
             await SwitchSceneInternalAsync(sceneName, taskToRun);
         }
         // ValueTasl
-        async UniTask SwitchSceneInternalAsync(string sceneName, ValueTask taskToRun)
+        private async UniTask SwitchSceneInternalAsync(string sceneName, ValueTask taskToRun)
         {
             InputManager.ClearAllSubscriber();
-            SubImage.sprite = MajInstances.SkinManager.SelectedSkin.SubDisplay;
+            UpdateBGSprite();
             //MainImage.sprite = MajInstances.SkinManager.SelectedSkin.LoadingSplash;
-            animator.SetBool("In", true);
-            await UniTask.Delay(SWITCH_ELAPSED_MS);
+            _loadingText.gameObject.SetActive(true);
+            await PlayTransitionAsync(true);
             while (!taskToRun.IsCompleted)
             {
                 await UniTask.Yield();
             }
-            if(taskToRun.IsFaulted)
+            if (taskToRun.IsFaulted)
             {
                 throw taskToRun.AsTask().Exception;
             }
-            LedRing.SetAllLight(LoadingLightColor);
-            CabinetLight.SetLight(0.5f);
+            CabinetLed.SetAllLight(_loadingLightColor);
+            CabinetLed.SetCabinetLight(0.5f);
             await SwitchSceneCoreAsync(sceneName, true);
         }
         public async UniTaskVoid SwitchSceneAfterTaskAsync(string sceneName, ValueTask taskToRun)
@@ -237,13 +544,13 @@ namespace MajdataPlay
             await SwitchSceneInternalAsync(sceneName, taskToRun);
         }
         // UniTask
-        async UniTask SwitchSceneInternalAsync(string sceneName, UniTask taskToRun)
+        private async UniTask SwitchSceneInternalAsync(string sceneName, UniTask taskToRun)
         {
             InputManager.ClearAllSubscriber();
-            SubImage.sprite = MajInstances.SkinManager.SelectedSkin.SubDisplay;
+            UpdateBGSprite();
             //MainImage.sprite = MajInstances.SkinManager.SelectedSkin.LoadingSplash;
-            animator.SetBool("In", true);
-            await UniTask.Delay(SWITCH_ELAPSED_MS);
+            _loadingText.gameObject.SetActive(true);
+            await PlayTransitionAsync(true);
             while (taskToRun.Status is not (UniTaskStatus.Succeeded or UniTaskStatus.Faulted or UniTaskStatus.Canceled))
             {
                 await UniTask.Yield();
@@ -252,10 +559,13 @@ namespace MajdataPlay
             {
                 case UniTaskStatus.Canceled:
                 case UniTaskStatus.Faulted:
-                    throw taskToRun.AsTask().Exception;
-            }            
-            LedRing.SetAllLight(LoadingLightColor);
-            CabinetLight.SetLight(0.5f);
+                    // Awaiting the completed task rethrows its exception or OperationCanceledException;
+                    // AsTask().Exception is null for a cancelled task.
+                    await taskToRun;
+                    break;
+            }
+            CabinetLed.SetAllLight(_loadingLightColor);
+            CabinetLed.SetCabinetLight(0.5f);
             await SwitchSceneCoreAsync(sceneName, true);
         }
         public async UniTaskVoid SwitchSceneAfterTaskAsync(string sceneName, UniTask taskToRun)
@@ -265,13 +575,13 @@ namespace MajdataPlay
 
 
         // Task
-        async UniTask<T> SwitchSceneInternalAsync<T>(string sceneName, Task<T> taskToRun)
+        private async UniTask<T> SwitchSceneInternalAsync<T>(string sceneName, Task<T> taskToRun)
         {
             InputManager.ClearAllSubscriber();
-            SubImage.sprite = MajInstances.SkinManager.SelectedSkin.SubDisplay;
+            UpdateBGSprite();
             //MainImage.sprite = MajInstances.SkinManager.SelectedSkin.LoadingSplash;
-            animator.SetBool("In", true);
-            await UniTask.Delay(SWITCH_ELAPSED_MS);
+            _loadingText.gameObject.SetActive(true);
+            await PlayTransitionAsync(true);
             while (!taskToRun.IsCompleted)
             {
                 await UniTask.Yield();
@@ -280,8 +590,8 @@ namespace MajdataPlay
             {
                 throw taskToRun.Exception;
             }
-            LedRing.SetAllLight(LoadingLightColor);
-            CabinetLight.SetLight(0.5f);
+            CabinetLed.SetAllLight(_loadingLightColor);
+            CabinetLed.SetCabinetLight(0.5f);
             await SwitchSceneCoreAsync(sceneName, true);
             return taskToRun.Result;
         }
@@ -290,13 +600,13 @@ namespace MajdataPlay
             return await SwitchSceneInternalAsync(sceneName, taskToRun);
         }
         // ValueTasl
-        async UniTask<T> SwitchSceneInternalAsync<T>(string sceneName, ValueTask<T> taskToRun)
+        private async UniTask<T> SwitchSceneInternalAsync<T>(string sceneName, ValueTask<T> taskToRun)
         {
             InputManager.ClearAllSubscriber();
-            SubImage.sprite = MajInstances.SkinManager.SelectedSkin.SubDisplay;
+            UpdateBGSprite();
             //MainImage.sprite = MajInstances.SkinManager.SelectedSkin.LoadingSplash;
-            animator.SetBool("In", true);
-            await UniTask.Delay(SWITCH_ELAPSED_MS);
+            _loadingText.gameObject.SetActive(true);
+            await PlayTransitionAsync(true);
             while (!taskToRun.IsCompleted)
             {
                 await UniTask.Yield();
@@ -305,8 +615,8 @@ namespace MajdataPlay
             {
                 throw taskToRun.AsTask().Exception;
             }
-            LedRing.SetAllLight(LoadingLightColor);
-            CabinetLight.SetLight(0.5f);
+            CabinetLed.SetAllLight(_loadingLightColor);
+            CabinetLed.SetCabinetLight(0.5f);
             await SwitchSceneCoreAsync(sceneName, true);
             return taskToRun.Result;
         }
@@ -315,13 +625,13 @@ namespace MajdataPlay
             return await SwitchSceneInternalAsync(sceneName, taskToRun);
         }
         // UniTask
-        async UniTask<T> SwitchSceneInternalAsync<T>(string sceneName, UniTask<T> taskToRun)
+        private async UniTask<T> SwitchSceneInternalAsync<T>(string sceneName, UniTask<T> taskToRun)
         {
             InputManager.ClearAllSubscriber();
-            SubImage.sprite = MajInstances.SkinManager.SelectedSkin.SubDisplay;
+            UpdateBGSprite();
             //MainImage.sprite = MajInstances.SkinManager.SelectedSkin.LoadingSplash;
-            animator.SetBool("In", true);
-            await UniTask.Delay(SWITCH_ELAPSED_MS);
+            _loadingText.gameObject.SetActive(true);
+            await PlayTransitionAsync(true);
             while (taskToRun.Status is not (UniTaskStatus.Succeeded or UniTaskStatus.Faulted or UniTaskStatus.Canceled))
             {
                 await UniTask.Yield();
@@ -330,10 +640,13 @@ namespace MajdataPlay
             {
                 case UniTaskStatus.Canceled:
                 case UniTaskStatus.Faulted:
-                    throw taskToRun.AsTask().Exception;
+                    // Awaiting the completed task rethrows its exception or OperationCanceledException;
+                    // AsTask().Exception is null for a cancelled task.
+                    await taskToRun;
+                    break;
             }
-            LedRing.SetAllLight(LoadingLightColor);
-            CabinetLight.SetLight(0.5f);
+            CabinetLed.SetAllLight(_loadingLightColor);
+            CabinetLed.SetCabinetLight(0.5f);
             await SwitchSceneCoreAsync(sceneName, true);
 
             return taskToRun.AsValueTask().Result;

@@ -7,6 +7,7 @@
 
 
 using Live2D.Cubism.Core.Unmanaged;
+using Live2D.Cubism.Framework;
 using System;
 using UnityEngine;
 
@@ -97,7 +98,7 @@ namespace Live2D.Cubism.Core
             // Pull.
             for (var i = 0; i < self.Length; ++i)
             {
-                self[i].Value = values[self[i].UnmanagedIndex];
+                self[i].OverrideValue(values[self[i].UnmanagedIndex]);
             }
         }
 
@@ -274,6 +275,26 @@ namespace Live2D.Cubism.Core
 
             // Clear dynamic flags.
             drawables.ResetDynamicFlags();
+        }
+
+        #endregion
+
+        #region Offscreens
+
+        /// <summary>
+        /// Revives (and sorts) <see cref="CubismOffscreen"/>s.
+        /// </summary>
+        /// <param name="self">Container.</param>
+        /// <param name="model">TaskableModel to unmanaged model.</param>
+        internal static void Revive(this CubismOffscreen[] self, CubismUnmanagedModel model)
+        {
+            Array.Sort(self, (a, b) => a.UnmanagedIndex - b.UnmanagedIndex);
+
+
+            for (var i = 0; i < self.Length; ++i)
+            {
+                self[i].Revive(model);
+            }
         }
 
         #endregion

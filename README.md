@@ -1,9 +1,12 @@
 # MajdataPlay
 
 ![license GPL-3.0](https://img.shields.io/badge/license-GPL--3.0-blue)
-![GitHub Release](https://img.shields.io/github/v/release/LingFeng-bbben/MajdataPlay?include_prereleases)
+![GitHub Release](https://img.shields.io/github/v/release/LingFeng-bbben/MajdataPlay)
 ![Discord](https://badgen.net/discord/online-members/AcWgZN7j6K)
-![Unity](https://img.shields.io/badge/Unity-2022.3.62f3-7e7e7e)
+![Unity](https://img.shields.io/badge/Unity-6000.3.17f1-7e7e7e)
+
+> [!NOTE]
+> This software has no affair with the `big S four letter` company, please support the arcade whenever you can.
 
 A Simai Player.
 
@@ -14,96 +17,25 @@ Simai is a maimai chart discription language developed by [Celeca](https://twitt
 ## Supported platforms
 
 - Windows
-- [Linux](https://github.com/LingFeng-bbben/MajdataPlay/wiki/%E5%B9%B3%E5%8F%B0%E7%9B%B8%E5%85%B3#linux) (Partially Supported)
+- [Linux](https://docs.majdata.net/en/majdataplay/install#linux) (Partially Supported)
 - macOS
 - Android
 - iOS
 
-> **Note:**
-> 
+> [!Note]
 > On macOS, only the DAO device is tested and fully supported. Other devices are untested.
 
-## Install
+## Installation
 
-# !DOWNLOAD NOW!
-## !DOWNLOAD NOW!
-### !DOWNLOAD NOW!
-#### !DOWNLOAD NOW!
-##### !DOWNLOAD NOW!
+See the [installation guide](https://docs.majdata.net/en/majdataplay/install) for stable and nightly builds, supported platforms and setup instructions.
 
-[<img src="googleplay.svg" height="60">](https://play.google.com/store/apps/details?id=net.majdata.majdataplay) [<img src="appstore.svg" height="60">](https://testflight.apple.com/join/PwxCNk5n)
+## Documentation
 
-## Getting Started
+The [Majdata documentation](https://docs.majdata.net) covers installation, configuration, charts, skins, recording, online services, judgment details and development guides.
 
-> ⚠️ This repository contains a Unity project, not a standard C#/.NET project.
-> 
-> Do not open or build it using dotnet, Visual Studio solution files, or other .NET build tools.
-> 
-> The project must be opened using the Unity Editor.
+## Development
 
-### Requirements
-
-- Unity Editor (version specified in ProjectSettings/ProjectVersion.txt)
-
-- git
-
-- Unity Hub
-
-### Clone the Repository
-
-Clone the project using Git:
-
-```bash
-git clone https://github.com/LingFeng-bbben/MajdataPlay.git MajdataPlay
-cd MajdataPlay
-```
-
-### Initialize Submodules
-
-This project uses Git submodules. After cloning, run:
-
-```bash
-git submodule update --init --recursive
-```
-
-If you already cloned the repository without submodules, you can also run:
-
-```bash
-git submodule sync
-git submodule update --init --recursive
-```
-
-### Install the Required Unity Version
-
-This project must be opened with the Unity version specified in:
-
-```text
-ProjectSettings/ProjectVersion.txt
-```
-
-Example:
-
-```text
-m_EditorVersion: 2022.3.62f3
-```
-
-Install this version using Unity Hub.
-
-### Open the Project in Unity Hub
-
-1. Open Unity Hub
-
-2. Click Add Project
-
-3. Select the cloned project folder
-
-4. Ensure the correct Unity version is selected
-
-5. Open the project
-
-## See Our Wiki Page for guide
-
-[WIKI](https://github.com/LingFeng-bbben/MajdataPlay/wiki)
+MajdataPlay is a Unity project. Do not open or build it with dotnet, Visual Studio solution files, or other .NET build tools. See the [build guide](https://docs.majdata.net/en/majdataplay/development/build) for the required Unity version, Git submodules and platform build steps.
 
 ## Releases
 
@@ -111,17 +43,11 @@ Install this version using Unity Hub.
 
 ## Reporting Problems
 
-Note this is project is still in a very early stage. Feel free if you wanna participate in coding or testing!!
+Feel free if you wanna participate in coding or testing!!
 
-Please report problems to issues page.
+Please report problems to [issues page](https://github.com/LingFeng-bbben/MajdataPlay/issues).
 
 The log files should be in `Logs/`
-
-## Note
-
-Please don't ask about mobile porting, unless you wanna do it yourself.
-
-This software has no affair with the `big S four letter` company, please support the arcade whenever you can.
 
 ## References
 

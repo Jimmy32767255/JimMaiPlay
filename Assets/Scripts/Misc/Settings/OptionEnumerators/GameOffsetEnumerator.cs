@@ -1,97 +1,43 @@
-﻿using System;
-using System.Collections.Generic;
-using System.Linq;
-using System.Text;
-using System.Threading.Tasks;
-using Unity.Collections.LowLevel.Unsafe;
-using UnityEngine;
-
-namespace MajdataPlay.Settings.OptionEnumerators;
-public sealed class GameOffsetEnumerator : DefaultNumberEnumerator, IOptionEnumerator, IDisposable
+﻿namespace MajdataPlay.Settings.OptionEnumerators;
+public sealed class GameOffsetEnumerator : DefaultNumberEnumerator, IOptionEnumerator
 {
     OffsetUnitOption _lastOffsetUnit;
-    public override void OnUpdate()
+
+    /// <summary>
+    /// Follows a change of the offset unit, then reads the stored offset again and snaps it onto the grid of the unit.
+    /// </summary>
+    public override void Refresh()
     {
         CheckOffsetUnit();
+        base.Refresh();
     }
-    public void Dispose()
+
+    /// <summary>
+    /// Uses the grid of the current offset unit instead of the step and range attributes.
+    /// </summary>
+    protected override void InitStepAndRange()
     {
-        CheckOffsetUnit();
-    }
-    protected override void InitInternal()
-    {
-        base.InitInternal();
-        _lastOffsetUnit = MajEnv.Settings.Debug.OffsetUnit;
+        _lastOffsetUnit = MajEnv.UserSettings.Judge.OffsetUnit;
         UpdateOptionStep();
     }
+
+    /// <summary>
+    /// Switches the step to the current offset unit when the unit changed since the last refresh.
+    /// </summary>
     void CheckOffsetUnit()
     {
-        var currentOffsetUnit = MajEnv.Settings.Debug.OffsetUnit;
+        var currentOffsetUnit = MajEnv.UserSettings.Judge.OffsetUnit;
         if (currentOffsetUnit == _lastOffsetUnit)
         {
             return;
         }
-        else if (currentOffsetUnit == OffsetUnitOption.Second)
-        {
-            CurrentValue = Math.Round((decimal)MajEnv.FRAME_LENGTH_SEC * CurrentValue, 3);
-            var valueToSet = (object)CurrentValue;
-            OptionValues[0] = valueToSet;
-            Value = Convert.ChangeType(valueToSet, Type);
-            ChartSettingStorage.ConvertUnitToSecond();
-        }
-        else
-        {
-            CurrentValue = Math.Round(CurrentValue / (decimal)MajEnv.FRAME_LENGTH_SEC, 1);
-            var valueToSet = (object)CurrentValue;
-            OptionValues[0] = valueToSet;
-            Value = Convert.ChangeType(valueToSet, Type);
-            ChartSettingStorage.ConvertUnitToFrame();
-        }
         UpdateOptionStep();
-        OptionValues[0] = Value;
-        UpdateValueText();
         _lastOffsetUnit = currentOffsetUnit;
     }
     void UpdateOptionStep()
     {
-        switch (Name)
-        {
-            case "AudioOffset":
-            case "JudgeOffset":
-            case "AnswerOffset":
-            case "TouchPanelOffset":
-            case "SlideFadeInOffset":
-                {
-                    if (MajEnv.Settings.Debug.OffsetUnit == OffsetUnitOption.Second)
-                    {
-                        MaxValue = null;
-                        MinValue = null;
-                        Step = 0.001m;
-                    }
-                    else
-                    {
-                        MaxValue = null;
-                        MinValue = null;
-                        Step = 0.1m;
-                    }
-                }
-                break;
-            case "DisplayOffset":
-                {
-                    if (MajEnv.Settings.Debug.OffsetUnit == OffsetUnitOption.Second)
-                    {
-                        MaxValue = null;
-                        MinValue = 0;
-                        Step = 0.001m;
-                    }
-                    else
-                    {
-                        MaxValue = null;
-                        MinValue = 0;
-                        Step = 0.1m;
-                    }
-                }
-                break;
-        }
+        MaxValue = null;
+        MinValue = Name == "DisplayOffset" ? 0 : null;
+        Step = MajEnv.UserSettings.Judge.OffsetUnit == OffsetUnitOption.Second ? 0.001m : 0.1m;
     }
 }

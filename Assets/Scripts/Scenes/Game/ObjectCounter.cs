@@ -1,22 +1,22 @@
-﻿using Cysharp.Text;
-using MajdataPlay.Buffers;
+using Cysharp.Text;
+using Cysharp.Threading.Tasks;
 using MajdataPlay.Collections;
+using MajdataPlay.Diagnostics;
 using MajdataPlay.Extensions;
 using MajdataPlay.Numerics;
 using MajdataPlay.Scenes.Game.Notes;
 using MajdataPlay.Scenes.Game.Notes.Behaviours;
 using MajdataPlay.Settings;
-using MajdataPlay.Utils;
 using MajSimai;
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using System.Runtime.CompilerServices;
+using System.Runtime.InteropServices;
 using System.Threading.Tasks;
 using TMPro;
-using Unity.Burst.Intrinsics;
 using Unity.IL2CPP.CompilerServices;
 using UnityEngine;
-using UnityEngine.Profiling;
 using UnityEngine.Serialization;
 using UnityEngine.UI;
 
@@ -42,34 +42,41 @@ namespace MajdataPlay.Scenes.Game
         public Color EarlyDiffColor;
         public Color LateDiffColor;
 
-        const string DX_ACC_RATE_STRING = "{0:F4}%";
-        const string CLASSIC_ACC_RATE_STRING = "{0:F2}%";
-        const string COMBO_OR_DXSCORE_STRING = "{0}";
-        const string DIFF_STRING = "{0:F2}";
-        const string DXSCORE_RANK_HEADER_STRING = "✧{0}";
-        const string DXSCORE_RANK_BODY_STRING = "+{0}";
-        const string LATE_STRING = "LATE";
-        const string FAST_STRING = "FAST";
-        const string JUDGE_RESULT_STRING = "{0}\n{1}\n{2}\n{3}\n{4}\n\n{5}\n{6}";
+        [SerializeField]
+        [FormerlySerializedAs("mainScreenInfoDisplayerColorPalette")]
+        private Color[] _mainScreenInfoDisplayerColorPalette = Array.Empty<Color>();
+        [SerializeField]
+        [FormerlySerializedAs("subScreenInfoDisplayerColorPalette")]
+        private Color[] _subScreenInfoDisplayerColorPalette = Array.Empty<Color>();
 
-        const int COLOR_PALETTE_CRITICAL_COMBO_COLOR_INDEX = 0;
-        const int COLOR_PALETTE_PERFECT_COMBO_COLOR_INDEX = 1;
-        const int COLOR_PALETTE_COMBO_COLOR_INDEX = 2;
-        const int COLOR_PALETTE_ACHIEVEMENT_DUB_COLOR_INDEX = 3;
-        const int COLOR_PALETTE_ACHIEVEMENT_BRONZE_COLOR_INDEX = 4;
-        const int COLOR_PALETTE_ACHIEVEMENT_SILVER_COLOR_INDEX = 5;
-        const int COLOR_PALETTE_ACHIEVEMENT_GOLD_COLOR_INDEX = 6;
-        const int COLOR_PALETTE_DX_SCORE_COLOR_INDEX = 7;
-        const int COLOR_PALETTE_DIFF_EARLY_COLOR_INDEX = 8;
-        const int COLOR_PALETTE_DIFF_LATE_COLOR_INDEX = 9;
+        private const string DX_ACC_RATE_STRING = "{0:F4}%";
+        private const string CLASSIC_ACC_RATE_STRING = "{0:F2}%";
+        private const string COMBO_OR_DXSCORE_STRING = "{0}";
+        private const string DIFF_STRING = "{0:F2}";
+        private const string DXSCORE_RANK_HEADER_STRING = "✧{0}";
+        private const string DXSCORE_RANK_BODY_STRING = "+{0}";
+        private const string LATE_STRING = "LATE";
+        private const string FAST_STRING = "FAST";
+        private const string JUDGE_RESULT_STRING = "{0}";
 
-        readonly static Utf16PreparedFormat<double> DX_ACC_RATE_FORMAT = ZString.PrepareUtf16<double>(DX_ACC_RATE_STRING);
-        readonly static Utf16PreparedFormat<double> CLASSIC_ACC_RATE_FORMAT = ZString.PrepareUtf16<double>(CLASSIC_ACC_RATE_STRING);
-        readonly static Utf16PreparedFormat<double> COMBO_OR_DXSCORE_FORMAT = ZString.PrepareUtf16<double>(COMBO_OR_DXSCORE_STRING);
-        readonly static Utf16PreparedFormat<double> DIFF_FORMAT = ZString.PrepareUtf16<double>(DIFF_STRING);
-        readonly static Utf16PreparedFormat<double> DXSCORE_RANK_HEADER_FORMAT = ZString.PrepareUtf16<double>(DXSCORE_RANK_HEADER_STRING);
-        readonly static Utf16PreparedFormat<double> DXSCORE_RANK_BODY_FORMAT = ZString.PrepareUtf16<double>(DXSCORE_RANK_BODY_STRING);
-        readonly static Utf16PreparedFormat<long, long, long, long, long, long, long> JUDGE_RESULT_FORMAT = ZString.PrepareUtf16<long, long, long, long, long, long, long>(JUDGE_RESULT_STRING);
+        private const int COLOR_PALETTE_CRITICAL_COMBO_COLOR_INDEX = 0;
+        private const int COLOR_PALETTE_PERFECT_COMBO_COLOR_INDEX = 1;
+        private const int COLOR_PALETTE_COMBO_COLOR_INDEX = 2;
+        private const int COLOR_PALETTE_ACHIEVEMENT_DUB_COLOR_INDEX = 3;
+        private const int COLOR_PALETTE_ACHIEVEMENT_BRONZE_COLOR_INDEX = 4;
+        private const int COLOR_PALETTE_ACHIEVEMENT_SILVER_COLOR_INDEX = 5;
+        private const int COLOR_PALETTE_ACHIEVEMENT_GOLD_COLOR_INDEX = 6;
+        private const int COLOR_PALETTE_DX_SCORE_COLOR_INDEX = 7;
+        private const int COLOR_PALETTE_DIFF_EARLY_COLOR_INDEX = 8;
+        private const int COLOR_PALETTE_DIFF_LATE_COLOR_INDEX = 9;
+
+        private static readonly Utf16PreparedFormat<double> DX_ACC_RATE_FORMAT = ZString.PrepareUtf16<double>(DX_ACC_RATE_STRING);
+        private static readonly Utf16PreparedFormat<double> CLASSIC_ACC_RATE_FORMAT = ZString.PrepareUtf16<double>(CLASSIC_ACC_RATE_STRING);
+        private static readonly Utf16PreparedFormat<double> COMBO_OR_DXSCORE_FORMAT = ZString.PrepareUtf16<double>(COMBO_OR_DXSCORE_STRING);
+        private static readonly Utf16PreparedFormat<double> DIFF_FORMAT = ZString.PrepareUtf16<double>(DIFF_STRING);
+        private static readonly Utf16PreparedFormat<double> DXSCORE_RANK_HEADER_FORMAT = ZString.PrepareUtf16<double>(DXSCORE_RANK_HEADER_STRING);
+        private static readonly Utf16PreparedFormat<double> DXSCORE_RANK_BODY_FORMAT = ZString.PrepareUtf16<double>(DXSCORE_RANK_BODY_STRING);
+        private static readonly Utf16PreparedFormat<long> JUDGMENT_COUNT_FORMAT = ZString.PrepareUtf16<long>(JUDGE_RESULT_STRING);
 
         #endregion
 
@@ -78,27 +85,11 @@ namespace MajdataPlay.Scenes.Game
         {
             get
             {
-                return TapFinishedCount == TapSum &&
-                       HoldFinishedCount == HoldSum &&
-                       SlideFinishedCount == SlideSum &&
-                       TouchFinishedCount == TouchSum &&
-                       BreakFinishedCount == BreakSum;
-            }
-        }
-        public int TapFinishedCount { get; private set; }
-        public int HoldFinishedCount { get; private set; }
-        public int SlideFinishedCount { get; private set; }
-        public int TouchFinishedCount { get; private set; }
-        public int BreakFinishedCount { get; private set; }
-        public int NoteFinishedCount
-        {
-            get
-            {
-                return TapFinishedCount + 
-                       HoldFinishedCount + 
-                       SlideFinishedCount + 
-                       TouchFinishedCount + 
-                       BreakFinishedCount;
+                return _noteJudgeStats.TapJudgedCount == TapSum &&
+                       _noteJudgeStats.HoldJudgedCount == HoldSum &&
+                       _noteJudgeStats.SlideJudgedCount == SlideSum &&
+                       _noteJudgeStats.TouchJudgedCount == TouchSum &&
+                       _noteJudgeStats.BreakJudgedCount == BreakSum;
             }
         }
 
@@ -125,7 +116,24 @@ namespace MajdataPlay.Scenes.Game
         public long LostNoteExtraScore { get; private set; }
         public long LostNoteExtraScoreClassic { get; private set; }
 
-        readonly static double[] _accRate = new double[5]
+        public ref readonly AccurateStatistics AccurateStats
+        {
+            [MethodImpl(MethodImplOptions.AggressiveInlining)]
+            get
+            {
+                return ref Unsafe.As<double, AccurateStatistics>(ref _accRate[0]);
+            }
+        }
+        public ref readonly NoteJudgeStatistics JudgeStats
+        {
+            [MethodImpl(MethodImplOptions.AggressiveInlining)]
+            get
+            {
+                return ref Unsafe.As<NoteJudgeStatisticsInternal, NoteJudgeStatistics>(ref _noteJudgeStats);
+            }
+        }
+
+        private readonly double[] _accRate = new double[5]
         {
             0.00,    // classic acc (+)
             100.00,  // classic acc (-)
@@ -134,125 +142,155 @@ namespace MajdataPlay.Scenes.Game
             0.0000,  // acc (+)
         };
 
-        long _cPerfectCount = 0;
-        long _perfectCount = 0;
-        long _greatCount = 0;
-        long _goodCount = 0;
-        long _missCount = 0;
+        private NoteJudgeStatisticsInternal _noteJudgeStats;
+        private JudgeDisplayOption _breakFastLateDisplayOption;
+        private JudgeDisplayOption _noteFastLateDisplayOption;
 
-        long _fastCount = 0;
-        long _lateCount = 0;
+        private float _lastJudgeDiff = 0; // Note judge diff
+        private float _diffTimer = 3;
 
-        float _lastJudgeDiff = 0; // Note judge diff
-        float _diffTimer = 3;
+        private long _totalDXScore = 0;
+        private long _lostDXScore = 0;
 
-        long _totalDXScore = 0;
-        long _lostDXScore = 0;
+        private long _combo = 0; // Combo
+        private long _pCombo = 0; // Perfect Combo
+        private long _cPCombo = 0; // Critical Perfect
 
-        long _combo = 0; // Combo
-        long _pCombo = 0; // Perfect Combo
-        long _cPCombo = 0; // Critical Perfect
 
-        readonly static List<float> _noteJudgeDiffList = new(2048);
+        private List<float> _noteJudgeDiffList = new();
 
-        readonly static int[] _judgedTapCount = new int[15];
-        readonly static int[] _judgedHoldCount = new int[15];
-        readonly static int[] _judgedTouchCount = new int[15];
-        readonly static int[] _judgedTouchHoldCount = new int[15];
-        readonly static int[] _judgedSlideCount = new int[15];
-        readonly static int[] _judgedBreakCount = new int[15];
-        readonly static int[] _totalJudgedCount = new int[15];
+        private static readonly int[] _judgedTapCount = new int[15];
+        private static readonly int[] _judgedHoldCount = new int[15];
+        private static readonly int[] _judgedTouchCount = new int[15];
+        private static readonly int[] _judgedTouchHoldCount = new int[15];
+        private static readonly int[] _judgedSlideCount = new int[15];
+        private static readonly int[] _judgedBreakCount = new int[15];
+        private static readonly int[] _totalJudgedCount = new int[15];
 
-        readonly static Dictionary<JudgeGrade, int> _dictJudgedTapCount = new();
-        readonly static Dictionary<JudgeGrade, int> _dictJudgedHoldCount = new();
-        readonly static Dictionary<JudgeGrade, int> _dictJudgedTouchCount = new();
-        readonly static Dictionary<JudgeGrade, int> _dictJudgedTouchHoldCount = new();
-        readonly static Dictionary<JudgeGrade, int> _dictJudgedSlideCount = new();
-        readonly static Dictionary<JudgeGrade, int> _dictJudgedBreakCount = new();
-        readonly static Dictionary<JudgeGrade, int> _dictTotalJudgedCount = new();
+        private static readonly Dictionary<JudgeGrade, int> _dictJudgedTapCount = new();
+        private static readonly Dictionary<JudgeGrade, int> _dictJudgedHoldCount = new();
+        private static readonly Dictionary<JudgeGrade, int> _dictJudgedTouchCount = new();
+        private static readonly Dictionary<JudgeGrade, int> _dictJudgedTouchHoldCount = new();
+        private static readonly Dictionary<JudgeGrade, int> _dictJudgedSlideCount = new();
+        private static readonly Dictionary<JudgeGrade, int> _dictJudgedBreakCount = new();
+        private static readonly Dictionary<JudgeGrade, int> _dictTotalJudgedCount = new();
         #endregion
 
         #region UIrefs
-        TextMeshProUGUI _judgeResultCount;
-        TextMeshProUGUI _rate;
+        [SerializeField]
+        [FormerlySerializedAs("criticalCountDisplayer")]
+        private TextMeshProUGUI _criticalCountDisplayer;
+
+        [SerializeField]
+        [FormerlySerializedAs("perfectCountDisplayer")]
+        private TextMeshProUGUI _perfectCountDisplayer;
+
+        [SerializeField]
+        [FormerlySerializedAs("greatCountDisplayer")]
+        private TextMeshProUGUI _greatCountDisplayer;
+
+        [SerializeField]
+        [FormerlySerializedAs("goodCountDisplayer")]
+        private TextMeshProUGUI _goodCountDisplayer;
+
+        [SerializeField]
+        [FormerlySerializedAs("missCountDisplayer")]
+        private TextMeshProUGUI _missCountDisplayer;
+
+        [SerializeField]
+        [FormerlySerializedAs("fastCountDisplayer")]
+        private TextMeshProUGUI _fastCountDisplayer;
+
+        [SerializeField]
+        [FormerlySerializedAs("lateCountDisplayer")]
+        private TextMeshProUGUI _lateCountDisplayer;
+
+        private TextMeshProUGUI _rate;
 
         [SerializeField]
         [FormerlySerializedAs("centerInfoDisplayerHeader")]
-        TextMeshProUGUI _centerInfoDisplayerHeader;
+        private TextMeshProUGUI _centerInfoDisplayerHeader;
         [SerializeField]
         [FormerlySerializedAs("centerInfoDisplayerText")]
-        TextMeshProUGUI _centerInfoDisplayerText;
+        private TextMeshProUGUI _centerInfoDisplayerText;
 
-        GameObject _centerInfoDisplayerObject;
-        GameObject _centerInfoDisplayerHeaderObject;
+        private GameObject _centerInfoDisplayerObject;
+        private GameObject _centerInfoDisplayerHeaderObject;
 
         [SerializeField]
         [FormerlySerializedAs("secondaryInfoDisplayerHeader")]
-        TextMeshProUGUI _secondaryInfoDisplayerHeader;
+        private TextMeshProUGUI _secondaryInfoDisplayerHeader;
         [SerializeField]
         [FormerlySerializedAs("secondaryInfoDisplayerText")]
-        TextMeshProUGUI _secondaryInfoDisplayerText;
+        private TextMeshProUGUI _secondaryInfoDisplayerText;
 
-        GameObject _secondaryInfoDisplayerObject;
-        GameObject _secondaryInfoDisplayerHeaderObject;
+        private GameObject _secondaryInfoDisplayerObject;
+        private GameObject _secondaryInfoDisplayerHeaderObject;
 
         [SerializeField]
         [FormerlySerializedAs("subScreenInfoDisplayerText")]
-        TextMeshProUGUI _subScreenInfoDisplayerText;
+        private TextMeshProUGUI _subScreenInfoDisplayerText;
 
-        GameObject _subScreenInfoDisplayerObject;
-
-        [SerializeField]
-        GameObject _topInfoJudgeParent;
-        [SerializeField]
-        TextMeshProUGUI _topInfoPerfect;
-        [SerializeField]
-        TextMeshProUGUI _topInfoGreat;
-        [SerializeField]
-        TextMeshProUGUI _topInfoGood;
-        [SerializeField]
-        TextMeshProUGUI _topInfoMiss;
+        private GameObject _subScreenInfoDisplayerObject;
 
         [SerializeField]
-        GameObject _topInfoTimingParent;
+        private GameObject _topInfoJudgeParent;
         [SerializeField]
-        TextMeshProUGUI _topInfoFast;
+        private TextMeshProUGUI _topInfoPerfect;
         [SerializeField]
-        TextMeshProUGUI _topInfoLate;
+        private TextMeshProUGUI _topInfoGreat;
+        [SerializeField]
+        private TextMeshProUGUI _topInfoGood;
+        [SerializeField]
+        private TextMeshProUGUI _topInfoMiss;
+
+        [SerializeField]
+        private GameObject _topInfoTimingParent;
+        [SerializeField]
+        private TextMeshProUGUI _topInfoFast;
+        [SerializeField]
+        private TextMeshProUGUI _topInfoLate;
+
+        [SerializeField]
+        [FormerlySerializedAs("judgeTimingGaugeParent")]
+        private GameObject _judgeTimingGaugeParent;
+        [SerializeField]
+        [FormerlySerializedAs("judgeTimingGaugeScaleParent")]
+        private GameObject _judgeTimingGaugeScaleParent;
+
+        [SerializeField]
+        [FormerlySerializedAs("judgeTimingGaugeCursor")]
+        private RectTransform _judgeTimingGaugeCursor;
+
+        private GameObject[] _judgeTimingGaugeScales = Array.Empty<GameObject>();
+        private RectTransform[] _judgeTimingGaugeScaleTransforms = Array.Empty<RectTransform>();
+        private GaugeScaleBinding[] _gaugeScaleBindings = Array.Empty<GaugeScaleBinding>();
 
         #endregion
 
-        BGInfoOption _centerInfoDisplayOption = BGInfoOption.None;
-        BGInfoOption _secondaryInfoDisplayOption = BGInfoOption.None;
-        BGInfoOption _subScreenInfoDisplayOption = BGInfoOption.None;
+        private float _judgeTimingGaugeAvg = 0f;
+        private int _gaugeScaleBindingCursor = 0;
+        private int _judgeTimingGaugeScaleCount = 0;
+        private bool _isOutlinePlayRequested = false;
+        private bool _isJudgeTimingGaugeEnabled = false;
+        private BGInfoOption _centerInfoDisplayOption = BGInfoOption.None;
+        private BGInfoOption _secondaryInfoDisplayOption = BGInfoOption.None;
+        private BGInfoOption _subScreenInfoDisplayOption = BGInfoOption.None;
 
-        [SerializeField]
-        [FormerlySerializedAs("mainScreenInfoDisplayerColorPalette")]
-        Color[] _mainScreenInfoDisplayerColorPalette = Array.Empty<Color>();
-        [SerializeField]
-        [FormerlySerializedAs("subScreenInfoDisplayerColorPalette")]
-        Color[] _subScreenInfoDisplayerColorPalette = Array.Empty<Color>();
+        private XxlbDanceRequest _xxlbDanceRequest = new();
 
-        bool _isOutlinePlayRequested = false;
-        XxlbDanceRequest _xxlbDanceRequest = new();
+        private GameInfo _gameInfo = Majdata<GameInfo>.Instance!;
+        private OutlineLoader _outline;
+        private GamePlayManager _gpManager;
+        private XxlbAnimationController _xxlbController;
 
-        GameInfo _gameInfo = Majdata<GameInfo>.Instance!;
-        OutlineLoader _outline;
-        GamePlayManager _gpManager;
-        XxlbAnimationController _xxlbController;
-
-        Utf16ValueStringBuilder _sb = ZString.CreateStringBuilder();
+        private Utf16ValueStringBuilder _sb = ZString.CreateStringBuilder();
 
 
-        void Awake()
+        private void Awake()
         {
             Majdata<ObjectCounter>.Instance = this;
-            _judgeResultCount = GameObject.Find("JudgeResultCount").GetComponent<TextMeshProUGUI>();
             _rate = GameObject.Find("ObjectRate").GetComponent<TextMeshProUGUI>();
-
-            _centerInfoDisplayOption = MajEnv.Settings.Game.BGInfo;
-            _secondaryInfoDisplayOption = MajEnv.Settings.Game.SecondaryBGInfo;
-            _subScreenInfoDisplayOption = MajEnv.Settings.Game.SubScreenBGInfo;
 
             _centerInfoDisplayerObject = _centerInfoDisplayerText.gameObject;
             _centerInfoDisplayerHeaderObject = _centerInfoDisplayerHeader.gameObject;
@@ -262,10 +300,39 @@ namespace MajdataPlay.Scenes.Game
 
             _subScreenInfoDisplayerObject = _subScreenInfoDisplayerText.gameObject;
 
+            _judgeTimingGaugeScaleCount = _judgeTimingGaugeScaleParent.transform.childCount;
+            _judgeTimingGaugeScales = new GameObject[_judgeTimingGaugeScaleCount];
+            _judgeTimingGaugeScaleTransforms = new RectTransform[_judgeTimingGaugeScaleCount];
+            _gaugeScaleBindings = new GaugeScaleBinding[_judgeTimingGaugeScaleCount];
+            for (var i = 0; i < _judgeTimingGaugeScales.Length; i++)
+            {
+                _judgeTimingGaugeScales[i] = _judgeTimingGaugeScaleParent.transform.GetChild(i).gameObject;
+                _judgeTimingGaugeScaleTransforms[i] = _judgeTimingGaugeScales[i].GetComponent<RectTransform>();
+                var scaleImage = _judgeTimingGaugeScales[i].GetComponent<RawImage>();
+                scaleImage.enabled = false;
+                _gaugeScaleBindings[i] = new(_judgeTimingGaugeScaleTransforms[i], scaleImage);
+            }
+
+            _breakFastLateDisplayOption = MajEnv.UserSettings.Judge.BreakFastLateType;
+            _noteFastLateDisplayOption = MajEnv.UserSettings.Judge.FastLateType;
+            _centerInfoDisplayOption = MajEnv.UserSettings.Display.BGInfo;
+            _secondaryInfoDisplayOption = MajEnv.UserSettings.Display.SecondaryBGInfo;
+            _subScreenInfoDisplayOption = MajEnv.UserSettings.Display.SubScreenBGInfo;
+            _isJudgeTimingGaugeEnabled = MajEnv.UserSettings.Judge.EnableJudgeTimingGauge;
+
+            if (_isJudgeTimingGaugeEnabled)
+            {
+                _secondaryInfoDisplayOption = BGInfoOption.None;
+            }
+            else
+            {
+                _judgeTimingGaugeParent.SetActive(false);
+            }
+
             //clean up
             Clear();
 
-            switch (MajInstances.Settings.Game.TopInfo)
+            switch (MajEnv.UserSettings.Display.TopInfo)
             {
                 case TopInfoDisplayOption.Judge:
                     _topInfoJudgeParent.SetActive(true);
@@ -286,25 +353,25 @@ namespace MajdataPlay.Scenes.Game
             SetInfoDisplayerActive(_secondaryInfoDisplayerObject, _secondaryInfoDisplayerHeaderObject, true);
             SetInfoDisplayerActive(_subScreenInfoDisplayerObject, null, true);
 
-            SetInfoDisplayerInitText(_centerInfoDisplayerText, 
-                _centerInfoDisplayerHeader, 
-                _mainScreenInfoDisplayerColorPalette, 
+            SetInfoDisplayerInitText(_centerInfoDisplayerText,
+                _centerInfoDisplayerHeader,
+                _mainScreenInfoDisplayerColorPalette,
                 _centerInfoDisplayOption);
-            SetInfoDisplayerInitText(_secondaryInfoDisplayerText, 
-                _secondaryInfoDisplayerHeader, 
+            SetInfoDisplayerInitText(_secondaryInfoDisplayerText,
+                _secondaryInfoDisplayerHeader,
                 _mainScreenInfoDisplayerColorPalette,
                 _secondaryInfoDisplayOption);
-            SetInfoDisplayerInitText(_subScreenInfoDisplayerText, 
-                null, 
+            SetInfoDisplayerInitText(_subScreenInfoDisplayerText,
+                null,
                 _subScreenInfoDisplayerColorPalette,
                 _subScreenInfoDisplayOption);
         }
-        void OnDestroy()
+        private void OnDestroy()
         {
             Majdata<ObjectCounter>.Free();
             _sb.Dispose();
         }
-        void Start()
+        private void Start()
         {
             _outline = Majdata<OutlineLoader>.Instance!;
             _xxlbController = Majdata<XxlbAnimationController>.Instance!;
@@ -323,9 +390,24 @@ namespace MajdataPlay.Scenes.Game
                 _centerInfoDisplayerText.text = _gameInfo.CurrentHP.ToString();
                 _centerInfoDisplayerText.color = ComboColor;
             }
-            else if(_gpManager.IsAutoplay)
+            else if (_gpManager.IsAutoplay)
             {
                 _centerInfoDisplayerHeader.text = "AUTOPLAY";
+            }
+        }
+        internal void OnPreUpdate()
+        {
+            using (UnityProfiler.Create("ObjectCounter.OnPreUpdate"))
+            {
+                if (_isJudgeTimingGaugeEnabled)
+                {
+                    var deltaTime = MajTimeline.DeltaTime;
+                    for (var i = 0; i < _gaugeScaleBindings.Length; i++)
+                    {
+                        ref var binding = ref _gaugeScaleBindings[i];
+                        binding.OnPreUpdate(deltaTime);
+                    }
+                }
             }
         }
 
@@ -350,6 +432,13 @@ namespace MajdataPlay.Scenes.Game
                 {
                     _outline.Play();
                     _isOutlinePlayRequested = false;
+                }
+                if (_isJudgeTimingGaugeEnabled)
+                {
+                    var diffAvg = GetJudgeTimingGaugeAverage();
+                    var percent = Mathf.Clamp(diffAvg / 150f, -1, 1);
+                    var posX = 282.5f * percent;
+                    _judgeTimingGaugeCursor.anchoredPosition = new Vector2(posX, -30);
                 }
             }
         }
@@ -382,11 +471,6 @@ namespace MajdataPlay.Scenes.Game
                 0.0000,  // acc (+)
             };
             newAccRate.CopyTo(_accRate);
-            TapFinishedCount = 0;
-            HoldFinishedCount = 0;
-            SlideFinishedCount = 0;
-            TouchFinishedCount = 0;
-            BreakFinishedCount = 0;
 
             TapSum = 0;
             HoldSum = 0;
@@ -395,14 +479,7 @@ namespace MajdataPlay.Scenes.Game
             BreakSum = 0;
 
 
-            _cPerfectCount = 0;
-            _perfectCount = 0;
-            _greatCount = 0;
-            _goodCount = 0;
-            _missCount = 0;
-
-            _fastCount = 0;
-            _lateCount = 0;
+            _noteJudgeStats = new();
 
             _lastJudgeDiff = 0; // Note judge diff
             _diffTimer = 3;
@@ -436,13 +513,15 @@ namespace MajdataPlay.Scenes.Game
                 kv => kv.Key,
                 kv => _dictJudgedHoldCount[kv.Key] + _dictJudgedTouchHoldCount[kv.Key]
             );
+            // JudgeInfo keeps a reference to its dictionary, and the _dictJudged* dictionaries are static and reused,
+            // so each result gets its own copy; otherwise Clear and later records would overwrite earlier results.
             var record = new Dictionary<ScoreNoteType, JudgeInfo>()
             {
-                { ScoreNoteType.Tap, new (_dictJudgedTapCount) },
+                { ScoreNoteType.Tap, new (new Dictionary<JudgeGrade, int>(_dictJudgedTapCount)) },
                 { ScoreNoteType.Hold, new (holdRecord)},
-                { ScoreNoteType.Slide,new (_dictJudgedSlideCount)},
-                { ScoreNoteType.Break, new (_dictJudgedBreakCount)},
-                { ScoreNoteType.Touch, new (_dictJudgedTouchCount) }
+                { ScoreNoteType.Slide,new (new Dictionary<JudgeGrade, int>(_dictJudgedSlideCount))},
+                { ScoreNoteType.Break, new (new Dictionary<JudgeGrade, int>(_dictJudgedBreakCount))},
+                { ScoreNoteType.Touch, new (new Dictionary<JudgeGrade, int>(_dictJudgedTouchCount)) }
             };
             var judgeRecord = new JudgeDetail(record);
 
@@ -476,8 +555,8 @@ namespace MajdataPlay.Scenes.Game
                 SongDetail = song,
                 Level = level,
                 JudgeRecord = judgeRecord,
-                Fast = _fastCount,
-                Late = _lateCount,
+                Fast = _noteJudgeStats.TotalFastCount,
+                Late = _noteJudgeStats.TotalLateCount,
                 DXScore = _totalDXScore + _lostDXScore,
                 TotalDXScore = _totalDXScore,
                 ComboState = cState,
@@ -493,13 +572,88 @@ namespace MajdataPlay.Scenes.Game
 
             return JudgeDetail.UnpackJudgeRecord(new JudgeInfo(_dictTotalJudgedCount));
         }
+        /// <summary>
+        /// Captures the counters, scores, combos, timing samples and display options of the counter for the object
+        /// counter inspector.
+        /// </summary>
+        /// <returns>A new snapshot; capturing allocates, so only editor tools call this.</returns>
+        internal ObjectCounterDebugInfo CaptureDebugInfo()
+        {
+            var isDanLifeEnabled = _gameInfo is not null && _gameInfo.IsDanLifeEnabled;
+
+            return new ObjectCounterDebugInfo()
+            {
+                TapSum = TapSum,
+                HoldSum = HoldSum,
+                SlideSum = SlideSum,
+                TouchSum = TouchSum,
+                BreakSum = BreakSum,
+                NoteSum = NoteSum,
+                AllFinished = AllFinished,
+                JudgeStats = JudgeStats,
+                AccurateStats = AccurateStats,
+                TotalNoteBaseScore = TotalNoteBaseScore,
+                TotalNoteExtraScore = TotalNoteExtraScore,
+                CurrentNoteBaseScore = CurrentNoteBaseScore,
+                CurrentNoteExtraScore = CurrentNoteExtraScore,
+                CurrentNoteExtraScoreClassic = CurrentNoteExtraScoreClassic,
+                LostNoteBaseScore = LostNoteBaseScore,
+                LostNoteExtraScore = LostNoteExtraScore,
+                LostNoteExtraScoreClassic = LostNoteExtraScoreClassic,
+                Combo = _combo,
+                PerfectCombo = _pCombo,
+                CriticalPerfectCombo = _cPCombo,
+                TotalDXScore = _totalDXScore,
+                LostDXScore = _lostDXScore,
+                LastJudgeDiffMSec = _lastJudgeDiff,
+                DiffDisplayTimer = _diffTimer,
+                NoteJudgeDiffsMSec = _noteJudgeDiffList.ToArray(),
+                IsJudgeTimingGaugeEnabled = _isJudgeTimingGaugeEnabled,
+                JudgeTimingGaugeAverageMSec = GetJudgeTimingGaugeAverage(),
+                JudgeTimingGaugeScaleCount = _judgeTimingGaugeScaleCount,
+                NoteFastLateDisplayOption = _noteFastLateDisplayOption,
+                BreakFastLateDisplayOption = _breakFastLateDisplayOption,
+                CenterInfoOption = _centerInfoDisplayOption,
+                SecondaryInfoOption = _secondaryInfoDisplayOption,
+                SubScreenInfoOption = _subScreenInfoDisplayOption,
+                TopInfoOption = MajEnv.UserSettings.Display.TopInfo,
+                IsDanLifeEnabled = isDanLifeEnabled,
+                CurrentHP = isDanLifeEnabled ? _gameInfo.CurrentHP : 0,
+                MaxHP = isDanLifeEnabled ? _gameInfo.MaxHP : 0,
+                TapGradeCounts = (int[])_judgedTapCount.Clone(),
+                HoldGradeCounts = (int[])_judgedHoldCount.Clone(),
+                TouchHoldGradeCounts = (int[])_judgedTouchHoldCount.Clone(),
+                TouchGradeCounts = (int[])_judgedTouchCount.Clone(),
+                SlideGradeCounts = (int[])_judgedSlideCount.Clone(),
+                BreakGradeCounts = (int[])_judgedBreakCount.Clone(),
+                TotalGradeCounts = (int[])_totalJudgedCount.Clone()
+            };
+        }
+        /// <summary>
+        /// Gets the average judge difference of the latest taps and holds that the judge timing gauge shows, one for each
+        /// of its scales.
+        /// </summary>
+        /// <returns>The average in milliseconds, or 0 before the first tap or hold is judged.</returns>
+        float GetJudgeTimingGaugeAverage()
+        {
+            var diffSum = 0f;
+            for (var i = 0; i < _gaugeScaleBindings.Length; i++)
+            {
+                ref var binding = ref _gaugeScaleBindings[i];
+                diffSum += binding.DiffMSec;
+            }
+            var sampleCount = Mathf.Min(_judgeTimingGaugeScaleCount, _noteJudgeDiffList.Count);
+            // Before the first tap or hold judgement there are no samples; keep the cursor centred
+            // instead of dividing by zero (0 / 0 is NaN).
+            return sampleCount > 0 ? diffSum / sampleCount : 0f;
+        }
 
         private void UpdateOutput()
         {
             UpdateMainOutput();
             UpdateJudgeResult();
         }
-        void UpdateAccRate()
+        private void UpdateAccRate()
         {
             // classic acc (+)
             // classic acc (-)
@@ -514,8 +668,8 @@ namespace MajdataPlay.Scenes.Game
             newAccRate[0] = CurrentNoteScoreClassic / (decimal)TotalNoteBaseScore;
             newAccRate[1] = (TotalNoteBaseScore - LostNoteBaseScore + CurrentNoteExtraScoreClassic) / (decimal)TotalNoteBaseScore;
             newAccRate[2] = ((TotalNoteBaseScore - LostNoteBaseScore) / (decimal)TotalNoteBaseScore) + ((TotalNoteExtraScore - LostNoteExtraScore) / ((decimal)(TotalNoteExtraScore is 0 ? 1 : TotalNoteExtraScore) * 100));
-            newAccRate[3] = ((TotalNoteBaseScore - LostNoteBaseScore) / (decimal)TotalNoteBaseScore) + ((CurrentNoteExtraScore) / ((decimal)(TotalNoteExtraScore is 0 ? 1 : TotalNoteExtraScore) * 100));
-            newAccRate[4] = ((CurrentNoteBaseScore) / (decimal)TotalNoteBaseScore) + ((CurrentNoteExtraScore) / ((decimal)(TotalNoteExtraScore is 0 ? 1 : TotalNoteExtraScore) * 100));
+            newAccRate[3] = ((TotalNoteBaseScore - LostNoteBaseScore) / (decimal)TotalNoteBaseScore) + (CurrentNoteExtraScore / ((decimal)(TotalNoteExtraScore is 0 ? 1 : TotalNoteExtraScore) * 100));
+            newAccRate[4] = (CurrentNoteBaseScore / (decimal)TotalNoteBaseScore) + (CurrentNoteExtraScore / ((decimal)(TotalNoteExtraScore is 0 ? 1 : TotalNoteExtraScore) * 100));
 
             _accRate[0] = decimal.ToDouble(newAccRate[0] * 100);
             _accRate[1] = decimal.ToDouble(newAccRate[1] * 100);
@@ -523,6 +677,17 @@ namespace MajdataPlay.Scenes.Game
             _accRate[3] = decimal.ToDouble(newAccRate[3] * 100);
             _accRate[4] = decimal.ToDouble(newAccRate[4] * 100);
         }
+        /// <summary>
+        /// Counts the notes of a chart by kind and sets the note sums, the total scores and the total DX score.
+        /// </summary>
+        /// <remarks>
+        /// Since MajSimai 3.0 the star head of a slide is its own <see cref="SimaiNoteType.Tap"/> note, so it is counted
+        /// once as a tap (or a break when the head is a break), and every <see cref="SimaiNoteType.Slide"/> note counts
+        /// only its path (a break when the path is a break). This gives the same sums as the 2.x model, where a slide
+        /// with a head counted one star plus one slide and a slide without a head only the slide.
+        /// </remarks>
+        /// <param name="chart">The chart whose notes are counted.</param>
+        /// <returns>A task that completes when the sums are set and the outputs are refreshed on the main thread.</returns>
         internal async ValueTask CountNoteSumAsync(SimaiChart chart)
         {
             await Task.Run(() =>
@@ -533,7 +698,7 @@ namespace MajdataPlay.Scenes.Game
                     {
                         if (!note.IsBreak)
                         {
-                            switch(note.Type)
+                            switch (note.Type)
                             {
                                 case SimaiNoteType.Tap:
                                     TapSum++;
@@ -543,12 +708,7 @@ namespace MajdataPlay.Scenes.Game
                                     HoldSum++;
                                     break;
                                 case SimaiNoteType.Slide:
-                                    if (!note.IsSlideNoHead)
-                                        TapSum++;
-                                    if (note.IsSlideBreak)
-                                        BreakSum++;
-                                    else
-                                        SlideSum++;
+                                    SlideSum++;
                                     break;
                                 case SimaiNoteType.Touch:
                                     TouchSum++;
@@ -557,33 +717,24 @@ namespace MajdataPlay.Scenes.Game
                         }
                         else
                         {
-                            if (note.Type == SimaiNoteType.Slide)
-                            {
-                                if (!note.IsSlideNoHead) 
-                                    BreakSum++;
-                                if (note.IsSlideBreak)
-                                    BreakSum++;
-                                else
-                                    SlideSum++;
-                            }
-                            else
-                            {
-                                BreakSum++;
-                            }
+                            BreakSum++;
                         }
                     }
                 }
                 NoteSum = TapSum + HoldSum + TouchSum + BreakSum + SlideSum;
-                TotalNoteBaseScore = (TapSum + TouchSum) * 500 + HoldSum * 1000 + SlideSum * 1500 + BreakSum * 2500;
+                TotalNoteBaseScore = ((TapSum + TouchSum) * 500) + (HoldSum * 1000) + (SlideSum * 1500) + (BreakSum * 2500);
                 TotalNoteExtraScore = BreakSum * 100;
                 _totalDXScore = NoteSum * 3;
+                _noteJudgeDiffList = new(NoteSum);
             });
+            await UniTask.SwitchToMainThread();
+            UpdateAccRate();
+            UpdateOutput();
         }
-        internal void ReportResult<T>(T note, in NoteJudgeResult judgeResult, int multiple = 1) where T: NoteDrop
+        internal void ReportResult<T>(T note, in NoteJudgeResult judgeResult, int multiple = 1) where T : NoteDrop
         {
             var grade = judgeResult.Grade;
-            var isBreak = judgeResult.IsBreak;
-            var isSlide = note is SlideDrop or WifiDrop;
+            var isSlide = note is SlideBase;
 
             if (!isSlide && !judgeResult.IsMissOrTooFast)
             {
@@ -594,17 +745,26 @@ namespace MajdataPlay.Scenes.Game
             if (!judgeResult.IsMissOrTooFast)
             {
                 _combo += multiple;
-                switch(note)
+                if (!judgeResult.IsMine)
                 {
-                    case TapDrop:
-                    case HoldDrop:
-                        _isOutlinePlayRequested = true;
-                        _noteJudgeDiffList.Add(judgeResult.Diff);
-                        break;
+                    switch (note)
+                    {
+                        case TapDrop:
+                        case HoldDrop:
+                            _isOutlinePlayRequested = true;
+                            var diffMSec = judgeResult.Diff;
+                            _noteJudgeDiffList.Add(diffMSec);
+                            if (_isJudgeTimingGaugeEnabled)
+                            {
+                                ref var binding = ref _gaugeScaleBindings[_gaugeScaleBindingCursor++ % _judgeTimingGaugeScaleCount];
+                                binding.DiffMSec = diffMSec;
+                            }
+                            break;
+                    }
                 }
             }
 
-            if (MajEnv.Mode == RunningMode.Play && _gameInfo.IsDanLifeEnabled) 
+            if (MajEnv.Mode == RunningMode.Play && _gameInfo.IsDanLifeEnabled)
             {
                 _gameInfo.OnNoteJudged(judgeResult.Grade, multiple);
                 if (_gameInfo.CurrentHP == 0 && _gameInfo.IsForceGameover)
@@ -620,7 +780,7 @@ namespace MajdataPlay.Scenes.Game
             };
 
             UpdateComboCount(grade, multiple);
-            UpdateJudgeCount(note, grade, isBreak, multiple);
+            UpdateJudgeCount(note, judgeResult, multiple);
             UpdateNoteScoreCount(note, judgeResult, multiple);
             UpdateFastLateCount(judgeResult, multiple);
         }
@@ -628,13 +788,13 @@ namespace MajdataPlay.Scenes.Game
         /// <summary>
         /// 更新BgInfo
         /// </summary>
-        void UpdateMainOutput()
+        private void UpdateMainOutput()
         {
             UpdateCenterInfoOutput();
             UpdateSecondaryInfoOutput();
             UpdateSubScreenInfoOutput();
         }
-        void UpdateCenterInfoOutput()
+        private void UpdateCenterInfoOutput()
         {
             if (MajEnv.Mode != RunningMode.View && _gameInfo.IsDanLifeEnabled)
             {
@@ -646,32 +806,32 @@ namespace MajdataPlay.Scenes.Game
                 SetInfoDisplayerActive(_centerInfoDisplayerObject, _centerInfoDisplayerHeaderObject, true);
                 return;
             }
-            UpdateInfoDisplayerOutput(_centerInfoDisplayerText, 
-                _centerInfoDisplayerObject, 
-                _centerInfoDisplayerHeader, 
+            UpdateInfoDisplayerOutput(_centerInfoDisplayerText,
+                _centerInfoDisplayerObject,
+                _centerInfoDisplayerHeader,
                 _centerInfoDisplayerHeaderObject,
                 _mainScreenInfoDisplayerColorPalette,
                 _centerInfoDisplayOption);
         }
-        void UpdateSecondaryInfoOutput()
+        private void UpdateSecondaryInfoOutput()
         {
-            UpdateInfoDisplayerOutput(_secondaryInfoDisplayerText, 
-                _secondaryInfoDisplayerObject, 
-                _secondaryInfoDisplayerHeader, 
+            UpdateInfoDisplayerOutput(_secondaryInfoDisplayerText,
+                _secondaryInfoDisplayerObject,
+                _secondaryInfoDisplayerHeader,
                 _secondaryInfoDisplayerHeaderObject,
                 _mainScreenInfoDisplayerColorPalette,
                 _secondaryInfoDisplayOption);
         }
-        void UpdateSubScreenInfoOutput()
+        private void UpdateSubScreenInfoOutput()
         {
-            UpdateInfoDisplayerOutput(_subScreenInfoDisplayerText, 
-                _subScreenInfoDisplayerObject, 
-                null, 
+            UpdateInfoDisplayerOutput(_subScreenInfoDisplayerText,
+                _subScreenInfoDisplayerObject,
+                null,
                 null,
                 _subScreenInfoDisplayerColorPalette,
                 _subScreenInfoDisplayOption);
         }
-        void UpdateInfoDisplayerOutput(TextMeshProUGUI text, 
+        private void UpdateInfoDisplayerOutput(TextMeshProUGUI text,
             GameObject textObject,
             TextMeshProUGUI? header,
             GameObject? headerObject,
@@ -773,11 +933,13 @@ namespace MajdataPlay.Scenes.Game
                         var a = _sb.AsArraySegment();
                         text.SetCharArray(a.Array, a.Offset, a.Count);
 
-                        var oldColor = colorPalette[COLOR_PALETTE_DIFF_EARLY_COLOR_INDEX];
+                        _ = colorPalette[COLOR_PALETTE_DIFF_EARLY_COLOR_INDEX];
+
+                        Color oldColor;
                         if (_lastJudgeDiff < 0)
                         {
                             oldColor = colorPalette[COLOR_PALETTE_DIFF_EARLY_COLOR_INDEX];
-                            if(header is not null)
+                            if (header is not null)
                             {
                                 header.text = FAST_STRING;
                             }
@@ -785,7 +947,7 @@ namespace MajdataPlay.Scenes.Game
                         else
                         {
                             oldColor = colorPalette[COLOR_PALETTE_DIFF_LATE_COLOR_INDEX];
-                            if(header is not null)
+                            if (header is not null)
                             {
                                 header.text = LATE_STRING;
                             }
@@ -797,7 +959,7 @@ namespace MajdataPlay.Scenes.Game
                             b = oldColor.b,
                             a = _diffTimer.Clamp(0, 1)
                         };
-                        if(header is not null)
+                        if (header is not null)
                         {
                             header.color = newColor;
                         }
@@ -813,10 +975,10 @@ namespace MajdataPlay.Scenes.Game
         /// 更新Combo
         /// </summary>
         /// <param name="combo"></param>
-        void UpdateCombo(TextMeshProUGUI text, 
-            GameObject textObject, 
-            GameObject? headerObject, 
-            in ReadOnlySpan<Color> colorPalette, 
+        private void UpdateCombo(TextMeshProUGUI text,
+            GameObject textObject,
+            GameObject? headerObject,
+            in ReadOnlySpan<Color> colorPalette,
             in long combo)
         {
             if (combo == 0)
@@ -832,8 +994,8 @@ namespace MajdataPlay.Scenes.Game
                 text.SetCharArray(a.Array, a.Offset, a.Count);
             }
         }
-        void UpdateRankBoard(TextMeshProUGUI text, 
-            GameObject textObject, 
+        private void UpdateRankBoard(TextMeshProUGUI text,
+            GameObject textObject,
             GameObject? headerObject,
             in BGInfoOption bgInfo)
         {
@@ -868,11 +1030,11 @@ namespace MajdataPlay.Scenes.Game
                 SetInfoDisplayerActive(textObject, headerObject, false);
             }
         }
-        void UpdateDXScoreRank(TextMeshProUGUI text, 
-            GameObject textObject, 
-            TextMeshProUGUI? header, 
-            GameObject? headerObject, 
-            in ReadOnlySpan<Color> colorPalette, 
+        private void UpdateDXScoreRank(TextMeshProUGUI text,
+            GameObject textObject,
+            TextMeshProUGUI? header,
+            GameObject? headerObject,
+            in ReadOnlySpan<Color> colorPalette,
             in BGInfoOption bgInfo)
         {
             var remainingDXScore = _totalDXScore + _lostDXScore;
@@ -902,7 +1064,7 @@ namespace MajdataPlay.Scenes.Game
                 case 5:
                 case 4:
                 case 3:
-                    if(header is not null)
+                    if (header is not null)
                     {
                         header.color = colorPalette[COLOR_PALETTE_ACHIEVEMENT_GOLD_COLOR_INDEX];
                     }
@@ -910,7 +1072,7 @@ namespace MajdataPlay.Scenes.Game
                     break;
                 case 2:
                 case 1:
-                    if(header is not null)
+                    if (header is not null)
                     {
                         header.color = colorPalette[COLOR_PALETTE_DX_SCORE_COLOR_INDEX];
                     }
@@ -918,9 +1080,9 @@ namespace MajdataPlay.Scenes.Game
                     break;
             }
         }
-        void SetInfoDisplayerActive(GameObject displayerObject, GameObject? displayerHeaderObject, bool state)
+        private void SetInfoDisplayerActive(GameObject displayerObject, GameObject? displayerHeaderObject, bool state)
         {
-            if(state)
+            if (state)
             {
                 displayerObject.layer = MajEnv.DEFAULT_LAYER;
                 if (displayerHeaderObject is not null)
@@ -931,21 +1093,21 @@ namespace MajdataPlay.Scenes.Game
             else
             {
                 displayerObject.layer = MajEnv.HIDDEN_LAYER;
-                if(displayerHeaderObject is not null)
+                if (displayerHeaderObject is not null)
                 {
                     displayerHeaderObject.layer = MajEnv.HIDDEN_LAYER;
                 }
             }
         }
-        void SetInfoDisplayerInitText(TextMeshProUGUI text, 
-            TextMeshProUGUI? header, 
-            in ReadOnlySpan<Color> colorPalette, 
+        private void SetInfoDisplayerInitText(TextMeshProUGUI text,
+            TextMeshProUGUI? header,
+            in ReadOnlySpan<Color> colorPalette,
             in BGInfoOption option)
         {
             switch (option)
             {
                 case BGInfoOption.CPCombo:
-                    if(header is not null)
+                    if (header is not null)
                     {
                         header.color = colorPalette[COLOR_PALETTE_CRITICAL_COMBO_COLOR_INDEX];
                         header.text = "CPCombo";
@@ -953,7 +1115,7 @@ namespace MajdataPlay.Scenes.Game
                     text.color = colorPalette[COLOR_PALETTE_CRITICAL_COMBO_COLOR_INDEX];
                     break;
                 case BGInfoOption.PCombo:
-                    if(header is not null)
+                    if (header is not null)
                     {
                         header.color = colorPalette[COLOR_PALETTE_PERFECT_COMBO_COLOR_INDEX];
                         header.text = "PCombo";
@@ -961,7 +1123,7 @@ namespace MajdataPlay.Scenes.Game
                     text.color = colorPalette[COLOR_PALETTE_PERFECT_COMBO_COLOR_INDEX];
                     break;
                 case BGInfoOption.Combo:
-                    if(header is not null)
+                    if (header is not null)
                     {
                         header.color = colorPalette[COLOR_PALETTE_COMBO_COLOR_INDEX];
                         header.text = "Combo";
@@ -973,7 +1135,7 @@ namespace MajdataPlay.Scenes.Game
                 case BGInfoOption.Achievement:
                 case BGInfoOption.AchievementClassical:
                 case BGInfoOption.AchievementClassical_100:
-                    if(header is not null)
+                    if (header is not null)
                     {
                         header.text = "Achievement";
                         header.color = colorPalette[COLOR_PALETTE_ACHIEVEMENT_GOLD_COLOR_INDEX];
@@ -981,7 +1143,7 @@ namespace MajdataPlay.Scenes.Game
                     break;
                 case BGInfoOption.DXScore:
                 case BGInfoOption.DXScoreRank:
-                    if(header is not null)
+                    if (header is not null)
                     {
                         header.text = "でらっくす SCORE";
                         header.color = colorPalette[COLOR_PALETTE_DX_SCORE_COLOR_INDEX];
@@ -989,7 +1151,7 @@ namespace MajdataPlay.Scenes.Game
                     text.color = colorPalette[COLOR_PALETTE_DX_SCORE_COLOR_INDEX];
                     break;
                 case BGInfoOption.S_Border:
-                    if(header is not null)
+                    if (header is not null)
                     {
                         header.text = "S  BORDER";
                         header.color = colorPalette[COLOR_PALETTE_ACHIEVEMENT_SILVER_COLOR_INDEX];
@@ -998,7 +1160,7 @@ namespace MajdataPlay.Scenes.Game
                     text.text = "4.0000%";
                     break;
                 case BGInfoOption.SS_Border:
-                    if(header is not null)
+                    if (header is not null)
                     {
                         header.text = "SS  BORDER";
                         header.color = colorPalette[COLOR_PALETTE_ACHIEVEMENT_GOLD_COLOR_INDEX];
@@ -1007,7 +1169,7 @@ namespace MajdataPlay.Scenes.Game
                     text.text = "2.0000%";
                     break;
                 case BGInfoOption.SSS_Border:
-                    if(header is not null)
+                    if (header is not null)
                     {
                         header.text = "SSS  BORDER";
                         header.color = colorPalette[COLOR_PALETTE_ACHIEVEMENT_GOLD_COLOR_INDEX];
@@ -1016,7 +1178,7 @@ namespace MajdataPlay.Scenes.Game
                     text.text = "1.0000%";
                     break;
                 case BGInfoOption.MyBest:
-                    if(header is not null)
+                    if (header is not null)
                     {
                         header.text = "MyBestScore BORDER";
                         header.color = colorPalette[COLOR_PALETTE_ACHIEVEMENT_GOLD_COLOR_INDEX];
@@ -1025,7 +1187,7 @@ namespace MajdataPlay.Scenes.Game
                     text.text = "101.0000%";
                     break;
                 case BGInfoOption.Diff:
-                    if(header is not null)
+                    if (header is not null)
                     {
                         header.color = colorPalette[COLOR_PALETTE_COMBO_COLOR_INDEX];
                         header.text = "";
@@ -1043,7 +1205,7 @@ namespace MajdataPlay.Scenes.Game
         /// <summary>
         /// 更新SubDisplay的JudgeResult
         /// </summary>
-        void UpdateJudgeResult()
+        private void UpdateJudgeResult()
         {
             //_judgeResultCount.text = ZString.Format(JUDGE_RESULT_STRING, 
             //                                        _cPerfectCount, 
@@ -1053,24 +1215,44 @@ namespace MajdataPlay.Scenes.Game
             //                                        _missCount, 
             //                                        _fastCount, 
             //                                        _lateCount);
+            ref var noteJudgeStats = ref _noteJudgeStats;
             _sb.Clear();
-            JUDGE_RESULT_FORMAT.FormatTo(ref _sb, _cPerfectCount,
-                                                    _perfectCount,
-                                                    _greatCount,
-                                                    _goodCount,
-                                                    _missCount,
-                                                    _fastCount,
-                                                    _lateCount);
-            var arraySegment = _sb.AsArraySegment();
-            _judgeResultCount.SetCharArray(arraySegment.Array, arraySegment.Offset, arraySegment.Count);
 
-            switch (MajInstances.Settings.Game.TopInfo)
+            JUDGMENT_COUNT_FORMAT.FormatTo(ref _sb, noteJudgeStats.TotalCriticalCount);
+            _criticalCountDisplayer.SetText(_sb);
+            _sb.Clear();
+
+            JUDGMENT_COUNT_FORMAT.FormatTo(ref _sb, noteJudgeStats.TotalPerfectCount);
+            _perfectCountDisplayer.SetText(_sb);
+            _sb.Clear();
+
+            JUDGMENT_COUNT_FORMAT.FormatTo(ref _sb, noteJudgeStats.TotalGreatCount);
+            _greatCountDisplayer.SetText(_sb);
+            _sb.Clear();
+
+            JUDGMENT_COUNT_FORMAT.FormatTo(ref _sb, noteJudgeStats.TotalGoodCount);
+            _goodCountDisplayer.SetText(_sb);
+            _sb.Clear();
+
+            JUDGMENT_COUNT_FORMAT.FormatTo(ref _sb, noteJudgeStats.TotalMissCount);
+            _missCountDisplayer.SetText(_sb);
+            _sb.Clear();
+
+            JUDGMENT_COUNT_FORMAT.FormatTo(ref _sb, noteJudgeStats.TotalFastCount);
+            _fastCountDisplayer.SetText(_sb);
+            _sb.Clear();
+
+            JUDGMENT_COUNT_FORMAT.FormatTo(ref _sb, noteJudgeStats.TotalLateCount);
+            _lateCountDisplayer.SetText(_sb);
+            _sb.Clear();
+
+            switch (MajEnv.UserSettings.Display.TopInfo)
             {
                 case TopInfoDisplayOption.Judge:
                     {
-                        var p = _cPerfectCount + _perfectCount;
+                        var p = noteJudgeStats.TotalCriticalCount + noteJudgeStats.TotalPerfectCount;
                         _sb.Clear();
-                        if(p != 0)
+                        if (p != 0)
                         {
                             _sb.Append(p);
                         }
@@ -1078,25 +1260,25 @@ namespace MajdataPlay.Scenes.Game
                         _topInfoPerfect.SetCharArray(a.Array, a.Offset, a.Count);
 
                         _sb.Clear();
-                        if (_greatCount != 0)
+                        if (noteJudgeStats.TotalGreatCount != 0)
                         {
-                            _sb.Append(_greatCount);
+                            _sb.Append(noteJudgeStats.TotalGreatCount);
                         }
                         var b = _sb.AsArraySegment();
                         _topInfoGreat.SetCharArray(b.Array, b.Offset, b.Count);
 
                         _sb.Clear();
-                        if (_goodCount != 0)
+                        if (noteJudgeStats.TotalGoodCount != 0)
                         {
-                            _sb.Append(_goodCount);
+                            _sb.Append(noteJudgeStats.TotalGoodCount);
                         }
                         var c = _sb.AsArraySegment();
                         _topInfoGood.SetCharArray(c.Array, c.Offset, c.Count);
 
                         _sb.Clear();
-                        if (_missCount != 0)
+                        if (noteJudgeStats.TotalMissCount != 0)
                         {
-                            _sb.Append(_missCount);
+                            _sb.Append(noteJudgeStats.TotalMissCount);
                         }
                         var d = _sb.AsArraySegment();
                         _topInfoMiss.SetCharArray(d.Array, d.Offset, d.Count);
@@ -1105,17 +1287,17 @@ namespace MajdataPlay.Scenes.Game
                 case TopInfoDisplayOption.Timing:
                     {
                         _sb.Clear();
-                        if (_fastCount != 0)
+                        if (noteJudgeStats.TotalFastCount != 0)
                         {
-                            _sb.Append(_fastCount);
+                            _sb.Append(noteJudgeStats.TotalFastCount);
                         }
                         var a = _sb.AsArraySegment();
                         _topInfoFast.SetCharArray(a.Array, a.Offset, a.Count);
 
                         _sb.Clear();
-                        if (_lateCount != 0)
+                        if (noteJudgeStats.TotalLateCount != 0)
                         {
-                            _sb.Append(_lateCount);
+                            _sb.Append(noteJudgeStats.TotalLateCount);
                         }
                         var b = _sb.AsArraySegment();
                         _topInfoLate.SetCharArray(b.Array, b.Offset, b.Count);
@@ -1127,19 +1309,11 @@ namespace MajdataPlay.Scenes.Game
             }
         }
         /// <summary>
-        /// 计算最终达成率
-        /// </summary>
-        public float CalculateFinalResult()
-        {
-            UpdateAccRate();
-            return (float)_accRate[2];
-        }
-        /// <summary>
         /// 根据Achievement更新BgInfoHeader的颜色
         /// </summary>
         /// <param name="achievementRate"></param>
         /// <param name="textElement"></param>
-        void UpdateAchievementColor(double achievementRate, TextMeshProUGUI textElement, in ReadOnlySpan<Color> colorPalette)
+        private void UpdateAchievementColor(double achievementRate, TextMeshProUGUI textElement, in ReadOnlySpan<Color> colorPalette)
         {
             var newColor = achievementRate switch
             {
@@ -1156,80 +1330,104 @@ namespace MajdataPlay.Scenes.Game
         }
 
         #region Counter update
-        void UpdateJudgeCount<T>(T note, JudgeGrade grade, bool isBreak, int multiple = 1) where T : NoteDrop
+        private void UpdateJudgeCount<T>(T note, in NoteJudgeResult judgeResult, int multiple = 1) where T : NoteDrop
         {
-            switch (note)
+            const int FIELD_CRITICAL_OFFSET = 0;
+            const int FIELD_PERFECT_OFFSET = 1;
+            const int FIELD_GREAT_OFFSET = 2;
+            const int FIELD_GOOD_OFFSET = 3;
+            const int FIELD_MISS_OFFSET = 4;
+            var isBreak = judgeResult.IsBreak;
+            var grade = judgeResult.Grade;
+            ref var noteJudgeStats = ref _noteJudgeStats;
+            ref var fieldHeadRef = ref Unsafe.NullRef<long>();
+            ref var totalFieldHeadRef = ref noteJudgeStats.TotalCriticalCount;
+            if (isBreak)
             {
-                case TapDrop:
-                    if (isBreak)
-                    {
-                        _judgedBreakCount[(int)grade] += multiple;
-                        BreakFinishedCount += multiple;
-                    }
-                    else
-                    {
+                _judgedBreakCount[(int)grade] += multiple;
+                noteJudgeStats.BreakJudgedCount += multiple;
+                fieldHeadRef = ref noteJudgeStats.BreakCriticalCount;
+            }
+            else
+            {
+                switch (note)
+                {
+                    case TapDrop:
                         _judgedTapCount[(int)grade] += multiple;
-                        TapFinishedCount += multiple;
-                    }
-                    break;
-                case WifiDrop:
-                case SlideDrop:
-                    if (isBreak)
-                    {
-                        _judgedBreakCount[(int)grade] += multiple;
-                        BreakFinishedCount += multiple;
-                    }
-                    else
-                    {
-                        _judgedSlideCount[(int)grade] += multiple;
-                        SlideFinishedCount += multiple;
-                    }
-                    break;
-                case HoldDrop:
-                    if (isBreak)
-                    {
-                        _judgedBreakCount[(int)grade] += multiple;
-                        BreakFinishedCount += multiple;
-                    }
-                    else
-                    {
+                        noteJudgeStats.TapJudgedCount += multiple;
+                        fieldHeadRef = ref noteJudgeStats.TapCriticalCount;
+                        break;
+                    case HoldDrop:
                         _judgedHoldCount[(int)grade] += multiple;
-                        HoldFinishedCount += multiple;
-                    }
-                    break;
-                case TouchDrop:
-                    if (isBreak)
-                    {
-                        _judgedBreakCount[(int)grade] += multiple;
-                        BreakFinishedCount += multiple;
-                    }
-                    else
-                    {
+                        noteJudgeStats.HoldJudgedCount += multiple;
+                        fieldHeadRef = ref noteJudgeStats.HoldCriticalCount;
+                        break;
+                    case SlideBase:
+                        _judgedSlideCount[(int)grade] += multiple;
+                        noteJudgeStats.SlideJudgedCount += multiple;
+                        fieldHeadRef = ref noteJudgeStats.SlideCriticalCount;
+                        break;
+                    case TouchDrop:
                         _judgedTouchCount[(int)grade] += multiple;
-                        TouchFinishedCount += multiple;
-                    }
-                    break;
-                case TouchHoldDrop:
-                    if (isBreak)
-                    {
-                        _judgedBreakCount[(int)grade] += multiple;
-                        BreakFinishedCount += multiple;
-                    }
-                    else
-                    {
+                        noteJudgeStats.TouchJudgedCount += multiple;
+                        fieldHeadRef = ref noteJudgeStats.TouchCriticalCount;
+                        break;
+                    case TouchHoldDrop:
                         _judgedTouchHoldCount[(int)grade] += multiple;
-                        HoldFinishedCount += multiple;
-                    }
-                    break;
+                        noteJudgeStats.HoldJudgedCount += multiple;
+                        fieldHeadRef = ref noteJudgeStats.HoldCriticalCount;
+                        break;
+                }
+
+            }
+            if (!Unsafe.IsNullRef(ref fieldHeadRef))
+            {
+                ref var fieldRef = ref fieldHeadRef;
+                ref var totalFieldRef = ref totalFieldHeadRef;
+                switch (grade)
+                {
+                    case JudgeGrade.Miss:
+                    case JudgeGrade.TooFast:
+                        fieldRef = ref Unsafe.Add(ref fieldRef, FIELD_MISS_OFFSET);
+                        totalFieldRef = ref Unsafe.Add(ref totalFieldHeadRef, FIELD_MISS_OFFSET);
+                        break;
+                    case JudgeGrade.LateGood:
+                    case JudgeGrade.FastGood:
+                        fieldRef = ref Unsafe.Add(ref fieldRef, FIELD_GOOD_OFFSET);
+                        totalFieldRef = ref Unsafe.Add(ref totalFieldHeadRef, FIELD_GOOD_OFFSET);
+                        break;
+                    case JudgeGrade.LateGreat3rd:
+                    case JudgeGrade.LateGreat2nd:
+                    case JudgeGrade.LateGreat:
+                    case JudgeGrade.FastGreat:
+                    case JudgeGrade.FastGreat2nd:
+                    case JudgeGrade.FastGreat3rd:
+                        fieldRef = ref Unsafe.Add(ref fieldRef, FIELD_GREAT_OFFSET);
+                        totalFieldRef = ref Unsafe.Add(ref totalFieldHeadRef, FIELD_GREAT_OFFSET);
+                        break;
+                    case JudgeGrade.LatePerfect3rd:
+                    case JudgeGrade.LatePerfect2nd:
+                    case JudgeGrade.FastPerfect2nd:
+                    case JudgeGrade.FastPerfect3rd:
+                        fieldRef = ref Unsafe.Add(ref fieldRef, FIELD_PERFECT_OFFSET);
+                        totalFieldRef = ref Unsafe.Add(ref totalFieldHeadRef, FIELD_PERFECT_OFFSET);
+                        break;
+                    default:
+                        fieldRef = ref Unsafe.Add(ref fieldRef, FIELD_CRITICAL_OFFSET);
+                        totalFieldRef = ref Unsafe.Add(ref totalFieldHeadRef, FIELD_CRITICAL_OFFSET);
+                        break;
+                }
+                fieldRef += multiple;
+                totalFieldRef += multiple;
             }
             _totalJudgedCount[(int)grade] += multiple;
+            noteJudgeStats.TotalJudgedCount += multiple;
         }
-        void UpdateComboCount(JudgeGrade grade, int multiple = 1)
+        private void UpdateComboCount(JudgeGrade grade, int multiple = 1)
         {
             switch (grade)
             {
                 case JudgeGrade.Perfect:
-                    _cPerfectCount += multiple;
                     _cPCombo += multiple;
                     _pCombo += multiple;
                     break;
@@ -1239,7 +1437,6 @@ namespace MajdataPlay.Scenes.Game
                 case JudgeGrade.FastPerfect3rd:
                     _cPCombo = 0;
                     _pCombo += multiple;
-                    _perfectCount += multiple;
                     _lostDXScore -= 1 * multiple;
                     break;
                 case JudgeGrade.LateGreat3rd:
@@ -1250,19 +1447,16 @@ namespace MajdataPlay.Scenes.Game
                 case JudgeGrade.FastGreat3rd:
                     _cPCombo = 0;
                     _pCombo = 0;
-                    _greatCount += multiple;
                     _lostDXScore -= 2 * multiple;
                     break;
                 case JudgeGrade.LateGood:
                 case JudgeGrade.FastGood:
                     _cPCombo = 0;
                     _pCombo = 0;
-                    _goodCount += multiple;
                     _lostDXScore -= 3 * multiple;
                     break;
                 case JudgeGrade.TooFast:
                 case JudgeGrade.Miss:
-                    _missCount += multiple;
                     _combo = 0;
                     _cPCombo = 0;
                     _pCombo = 0;
@@ -1270,7 +1464,7 @@ namespace MajdataPlay.Scenes.Game
                     break;
             }
         }
-        void UpdateNoteScoreCount<T>(T note, in NoteJudgeResult judgeResult, int multiple = 1) where T : NoteDrop
+        private void UpdateNoteScoreCount<T>(T note, in NoteJudgeResult judgeResult, int multiple = 1) where T : NoteDrop
         {
             var baseScore = 500;
 
@@ -1284,8 +1478,7 @@ namespace MajdataPlay.Scenes.Game
                 case TouchHoldDrop:
                     baseScore = 1000 * multiple;
                     break;
-                case SlideDrop:
-                case WifiDrop:
+                case SlideBase:
                     baseScore = 1500 * multiple;
                     break;
             }
@@ -1390,12 +1583,12 @@ namespace MajdataPlay.Scenes.Game
         /// Update Fast/Late count
         /// </summary>
         /// <param name="judgeResult"></param>
-        void UpdateFastLateCount(in NoteJudgeResult judgeResult, int multiple = 1)
+        private void UpdateFastLateCount(in NoteJudgeResult judgeResult, int multiple = 1)
         {
-            var gameSetting = judgeResult.IsBreak ? MajInstances.Settings.Display.BreakFastLateType : MajInstances.Settings.Display.FastLateType;
+            var gameSetting = judgeResult.IsBreak ? _breakFastLateDisplayOption : _noteFastLateDisplayOption;
             var resultValue = (int)judgeResult.Grade;
             var absValue = Math.Abs(7 - resultValue);
-
+            ref var noteJudgeStats = ref _noteJudgeStats;
             switch (gameSetting)
             {
                 case JudgeDisplayOption.All:
@@ -1406,11 +1599,11 @@ namespace MajdataPlay.Scenes.Game
                         }
                         else if (judgeResult.IsFast)
                         {
-                            _fastCount += multiple;
+                            noteJudgeStats.TotalFastCount += multiple;
                         }
                         else
                         {
-                            _lateCount += multiple;
+                            noteJudgeStats.TotalLateCount += multiple;
                         }
                     }
                     break;
@@ -1422,11 +1615,11 @@ namespace MajdataPlay.Scenes.Game
                         }
                         else if (judgeResult.IsFast)
                         {
-                            _fastCount += multiple;
+                            noteJudgeStats.TotalFastCount += multiple;
                         }
                         else
                         {
-                            _lateCount += multiple;
+                            noteJudgeStats.TotalLateCount += multiple;
                         }
                     }
                     break;
@@ -1441,21 +1634,198 @@ namespace MajdataPlay.Scenes.Game
                         }
                         else if (judgeResult.IsFast)
                         {
-                            _fastCount += multiple;
+                            noteJudgeStats.TotalFastCount += multiple;
                         }
                         else
                         {
-                            _lateCount += multiple;
+                            noteJudgeStats.TotalLateCount += multiple;
                         }
                     }
                     break;
             }
         }
         #endregion
-        readonly struct XxlbDanceRequest
+        private readonly struct XxlbDanceRequest
         {
             public bool IsRequested { get; init; }
             public JudgeGrade Grade { get; init; }
+        }
+        [StructLayout(LayoutKind.Sequential)]
+        public readonly struct AccurateStatistics
+        {
+            /// <summary>
+            /// classic acc (+)
+            /// </summary>
+            public readonly double ClassicAchievement_A;
+            /// <summary>
+            /// classic acc (-)
+            /// </summary>
+            public readonly double ClassicAchievement_B;
+            /// <summary>
+            /// acc 101(-)
+            /// </summary>
+            public readonly double Achievement_A;
+            /// <summary>
+            /// acc 100(-)
+            /// </summary>
+            public readonly double Achievement_B;
+            /// <summary>
+            /// acc (+)
+            /// </summary>
+            public readonly double Achievement_C;
+        }
+        [StructLayout(LayoutKind.Sequential)]
+        public readonly struct NoteJudgeStatistics
+        {
+            public readonly long TapCriticalCount;
+            public readonly long TapPerfectCount;
+            public readonly long TapGreatCount;
+            public readonly long TapGoodCount;
+            public readonly long TapMissCount;
+            public readonly long TapJudgedCount;
+
+            public readonly long HoldCriticalCount;
+            public readonly long HoldPerfectCount;
+            public readonly long HoldGreatCount;
+            public readonly long HoldGoodCount;
+            public readonly long HoldMissCount;
+            public readonly long HoldJudgedCount;
+
+            public readonly long SlideCriticalCount;
+            public readonly long SlidePerfectCount;
+            public readonly long SlideGreatCount;
+            public readonly long SlideGoodCount;
+            public readonly long SlideMissCount;
+            public readonly long SlideJudgedCount;
+
+            public readonly long TouchCriticalCount;
+            public readonly long TouchPerfectCount;
+            public readonly long TouchGreatCount;
+            public readonly long TouchGoodCount;
+            public readonly long TouchMissCount;
+            public readonly long TouchJudgedCount;
+
+            public readonly long BreakCriticalCount;
+            public readonly long BreakPerfectCount;
+            public readonly long BreakGreatCount;
+            public readonly long BreakGoodCount;
+            public readonly long BreakMissCount;
+            public readonly long BreakJudgedCount;
+
+            public readonly long TotalCriticalCount;
+            public readonly long TotalPerfectCount;
+            public readonly long TotalGreatCount;
+            public readonly long TotalGoodCount;
+            public readonly long TotalMissCount;
+            public readonly long TotalJudgedCount;
+
+            public readonly long TotalFastCount;
+            public readonly long TotalLateCount;
+        }
+        [StructLayout(LayoutKind.Sequential)]
+        private struct NoteJudgeStatisticsInternal
+        {
+            public long TapCriticalCount;
+            public long TapPerfectCount;
+            public long TapGreatCount;
+            public long TapGoodCount;
+            public long TapMissCount;
+            public long TapJudgedCount;
+
+            public long HoldCriticalCount;
+            public long HoldPerfectCount;
+            public long HoldGreatCount;
+            public long HoldGoodCount;
+            public long HoldMissCount;
+            public long HoldJudgedCount;
+
+            public long SlideCriticalCount;
+            public long SlidePerfectCount;
+            public long SlideGreatCount;
+            public long SlideGoodCount;
+            public long SlideMissCount;
+            public long SlideJudgedCount;
+
+            public long TouchCriticalCount;
+            public long TouchPerfectCount;
+            public long TouchGreatCount;
+            public long TouchGoodCount;
+            public long TouchMissCount;
+            public long TouchJudgedCount;
+
+            public long BreakCriticalCount;
+            public long BreakPerfectCount;
+            public long BreakGreatCount;
+            public long BreakGoodCount;
+            public long BreakMissCount;
+            public long BreakJudgedCount;
+
+            public long TotalCriticalCount;
+            public long TotalPerfectCount;
+            public long TotalGreatCount;
+            public long TotalGoodCount;
+            public long TotalMissCount;
+            public long TotalJudgedCount;
+
+            public long TotalFastCount;
+            public long TotalLateCount;
+        }
+
+        private struct GaugeScaleBinding
+        {
+            private const float FADE_OUT_DURATION_SEC = 2.5f;
+            public float DiffMSec
+            {
+                get
+                {
+                    return _diffMSec;
+                }
+                set
+                {
+                    if (_scaleTransform is not null)
+                    {
+                        var percent = Mathf.Clamp(value / 150f, -1, 1);
+                        var posX = 282.5f * percent;
+                        _diffMSec = 150f * percent;
+                        if (!_isActive)
+                        {
+                            _scaleImage!.enabled = true;
+                            _isActive = true;
+                        }
+                        _fadeOutTimer = 0f;
+                        _scaleImage!.color = Color.white;
+                        _scaleTransform.SetAsLastSibling();
+                        _scaleTransform.anchoredPosition = new Vector2(posX, 0);
+                    }
+                }
+            }
+
+            private bool _isActive;
+            private float _diffMSec;
+            private float _fadeOutTimer;
+            private RawImage? _scaleImage;
+            private GameObject? _scaleObject;
+            private RectTransform? _scaleTransform;
+
+            public GaugeScaleBinding(RectTransform scaleTransform, RawImage scaleImage)
+            {
+                _scaleObject = scaleTransform.gameObject;
+                _scaleTransform = scaleTransform;
+                _scaleImage = scaleImage;
+                _fadeOutTimer = FADE_OUT_DURATION_SEC;
+            }
+            [MethodImpl(MethodImplOptions.AggressiveInlining)]
+            public void OnPreUpdate(float deltaTime)
+            {
+                if (_fadeOutTimer == FADE_OUT_DURATION_SEC)
+                {
+                    return;
+                }
+                _fadeOutTimer += deltaTime;
+                _fadeOutTimer = Mathf.Clamp(_fadeOutTimer, 0f, FADE_OUT_DURATION_SEC);
+                var newColor = new Color(1f, 1f, 1f, 1 - (_fadeOutTimer / FADE_OUT_DURATION_SEC));
+                _scaleImage!.color = newColor;
+            }
         }
     }
 }

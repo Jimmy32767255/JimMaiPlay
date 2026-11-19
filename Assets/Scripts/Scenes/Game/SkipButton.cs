@@ -1,48 +1,80 @@
 using Cysharp.Threading.Tasks;
 using MajdataPlay.IO;
-using MajdataPlay.Utils;
-using System.Collections;
-using System.Collections.Generic;
+using System.Threading;
 using UnityEngine;
 #nullable enable
 namespace MajdataPlay.Scenes.Game
 {
     public class SkipButton : MonoBehaviour
     {
-        bool _isBound = false;
-        bool a = false;
-        void OnAreaDown(object? sender,InputEventArgs args)
+        private static readonly SensorArea[] s_defaultSensorArea =
         {
-            if (a)
+            SensorArea.B4,
+            SensorArea.B5,
+            SensorArea.E5,
+        };
+
+        private SensorArea[] _boundSensorAreas = new SensorArea[s_defaultSensorArea.Length];
+        private bool _isBound = false;
+        private bool _isTriggered = false;
+        private CancellationTokenSource? _bindCts;
+
+        private void Awake()
+        {
+            var rotationOffset = (int)MajEnv.SystemSettings.Rendering.GameplayScreenRotationAngle * 2;
+            for (var i = 0; i < s_defaultSensorArea.Length; i++)
+            {
+                _boundSensorAreas[i] = s_defaultSensorArea[i].Diff(rotationOffset);
+            }
+        }
+        private void OnAreaDown(object? sender, InputEventArgs args)
+        {
+            if (_isTriggered)
+            {
                 return;
-            a = true;
+            }
+            _isTriggered = true;
             Majdata<GamePlayManager>.Instance!.EndGame().Forget();
-            Destroy(gameObject);
         }
-        void OnEnable()
+        private void OnEnable()
         {
-            DelayBind().Forget();
+            _bindCts?.Cancel();
+            _bindCts?.Dispose();
+            _bindCts = new CancellationTokenSource();
+            DelayBind(_bindCts.Token).Forget();
         }
-        async UniTaskVoid DelayBind()
+        private async UniTaskVoid DelayBind(CancellationToken token)
         {
             if (_isBound)
+            {
                 return;
+            }
+            // The delay is cancelled by OnDisable, so a button disabled within the second never binds.
+            var isCanceled = await UniTask.Delay(1000, cancellationToken: token).SuppressCancellationThrow();
+            if (isCanceled || _isBound)
+            {
+                return;
+            }
             _isBound = true;
-            await UniTask.Delay(1000);
-            InputManager.BindSensor(OnAreaDown, SensorArea.B4);
-            InputManager.BindSensor(OnAreaDown, SensorArea.B5);
-            InputManager.BindSensor(OnAreaDown, SensorArea.E5);
+            foreach (var sensorArea in _boundSensorAreas)
+            {
+                InputManager.BindSensor(OnAreaDown, sensorArea);
+            }
         }
-        void OnDestroy()
+        private void OnDestroy()
         {
             OnDisable();
         }
-        void OnDisable()
+        private void OnDisable()
         {
+            _bindCts?.Cancel();
+            _bindCts?.Dispose();
+            _bindCts = null;
             _isBound = false;
-            InputManager.UnbindSensor(OnAreaDown, SensorArea.B4);
-            InputManager.UnbindSensor(OnAreaDown, SensorArea.B5);
-            InputManager.UnbindSensor(OnAreaDown, SensorArea.E5);
+            foreach (var sensorArea in _boundSensorAreas)
+            {
+                InputManager.UnbindSensor(OnAreaDown, sensorArea);
+            }
         }
     }
 }

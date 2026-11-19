@@ -8,9 +8,9 @@
 
 using Live2D.Cubism.Core;
 using Live2D.Cubism.Framework;
+using Live2D.Cubism.Rendering.URP.RenderingInterceptor;
 using System;
 using UnityEngine;
-
 using Object = UnityEngine.Object;
 
 
@@ -20,7 +20,7 @@ namespace Live2D.Cubism.Rendering
     /// Controls rendering of a <see cref="CubismModel"/>.
     /// </summary>
     [ExecuteInEditMode, CubismDontMoveOnReimport]
-    public sealed class CubismRenderController : MonoBehaviour, ICubismUpdatable
+    public sealed partial class CubismRenderController : MonoBehaviour, ICubismUpdatable
     {
         /// <summary>
         /// Model opacity.
@@ -47,33 +47,33 @@ namespace Live2D.Cubism.Rendering
         }
 
         /// <summary>
-        /// <see cref="OverwriteFlagForModelMultiplyColors"/> backing field.
+        /// <see cref="MultiplyColorEnabled"/> backing field.
         /// </summary>
         [SerializeField, HideInInspector]
-        private bool _isOverwrittenModelMultiplyColors;
+        private bool _isOverriddenModelMultiplyColors;
 
         /// <summary>
-        /// Whether to overwrite with multiply color from the model.
+        /// Whether to override with multiply color from the model.
         /// </summary>
-        public bool OverwriteFlagForModelMultiplyColors
+        public bool MultiplyColorEnabled
         {
-            get { return _isOverwrittenModelMultiplyColors; }
-            set { _isOverwrittenModelMultiplyColors = value; }
+            get { return _isOverriddenModelMultiplyColors; }
+            set { _isOverriddenModelMultiplyColors = value; }
         }
 
         /// <summary>
-        /// <see cref="OverwriteFlagForModelScreenColors"/> backing field.
+        /// <see cref="ScreenColorEnabled"/> backing field.
         /// </summary>
         [SerializeField, HideInInspector]
-        private bool _isOverwrittenModelScreenColors;
+        private bool _isOverriddenModelScreenColors;
 
         /// <summary>
-        /// Whether to overwrite with screen color from the model.
+        /// Whether to override with screen color from the model.
         /// </summary>
-        public bool OverwriteFlagForModelScreenColors
+        public bool ScreenColorEnabled
         {
-            get { return _isOverwrittenModelScreenColors; }
-            set { _isOverwrittenModelScreenColors = value; }
+            get { return _isOverriddenModelScreenColors; }
+            set { _isOverriddenModelScreenColors = value; }
         }
 
         /// <summary>
@@ -155,6 +155,8 @@ namespace Live2D.Cubism.Rendering
                 {
                     renderers[i].OnControllerSortingLayerDidChange(_sortingLayerId);
                 }
+
+                SortRenderers();
             }
         }
 
@@ -194,6 +196,8 @@ namespace Live2D.Cubism.Rendering
                 {
                     renderers[i].OnControllerSortingModeDidChange(_sortingMode);
                 }
+
+                SortRenderers();
             }
         }
 
@@ -233,6 +237,8 @@ namespace Live2D.Cubism.Rendering
                 {
                     renderers[i].OnControllerSortingOrderDidChange(SortingOrder);
                 }
+
+                SortRenderers();
             }
         }
 
@@ -369,7 +375,7 @@ namespace Live2D.Cubism.Rendering
         private Object _screenColorHandler;
 
         /// <summary>
-        /// Opacity handler proxy object.
+        /// Screen color handler proxy object.
         /// </summary>
         public Object ScreenColorHandler
         {
@@ -407,7 +413,7 @@ namespace Live2D.Cubism.Rendering
         /// You only need to adjust this value when using perspective cameras.
         /// </remarks>
         [SerializeField, HideInInspector]
-        public float _depthOffset = 0.00001f;
+        private float _depthOffset = 0.00001f;
 
         /// <summary>
         /// Depth offset used when sorting by depth.
@@ -439,13 +445,26 @@ namespace Live2D.Cubism.Rendering
             }
         }
 
+        /// <summary>
+        /// <see cref="Model"/>'s backing field.
+        /// </summary>
+        [NonSerialized]
+        private CubismModel _cubismModel;
 
         /// <summary>
         /// Model the controller belongs to.
         /// </summary>
-        private CubismModel Model
+        public CubismModel Model
         {
-            get { return this.FindCubismModel(); }
+            get
+            {
+                if (_cubismModel == null)
+                {
+                    _cubismModel = this.FindCubismModel();
+                }
+
+                return _cubismModel;
+            }
         }
 
 
@@ -471,11 +490,10 @@ namespace Live2D.Cubism.Rendering
             }
         }
 
-
         /// <summary>
         /// <see cref="Renderers"/>s backing field.
         /// </summary>
-        [NonSerialized]
+        [SerializeField]
         private CubismRenderer[] _renderers;
 
         /// <summary>
@@ -487,7 +505,7 @@ namespace Live2D.Cubism.Rendering
             {
                 if (_renderers == null)
                 {
-                    _renderers = Model.Drawables.GetComponentsMany<CubismRenderer>();
+                    TryInitialize();
                 }
 
                 return _renderers;
@@ -513,50 +531,82 @@ namespace Live2D.Cubism.Rendering
         [HideInInspector]
         public bool HasUpdateController { get; set; }
 
+        /// <summary>
+        /// <see cref="IsInitialized"/>s backing field.
+        /// </summary>
+        private bool _isInitialized = false;
+
+        /// <summary>
+        /// Is renderers initialized.
+        /// </summary>
+        [HideInInspector]
+        public bool IsInitialized
+        {
+            get
+            {
+                return _isInitialized;
+            }
+            private set
+            {
+                _isInitialized = value;
+            }
+        }
 
         /// <summary>
         /// Makes sure all <see cref="CubismDrawable"/>s have <see cref="CubismRenderer"/>s attached to them.
         /// </summary>
-        private void TryInitializeRenderers()
+        public void TryInitialize()
         {
-            // Try get renderers.
-            var renderers = Renderers;
-
-            // Create renderers if necesssary.
-            if (renderers == null || renderers.Length == 0)
+            // If the number of drawables has changed,
+            // discard the cached renderers so they are rebuilt to match the new drawable count.
+            if (_renderers != null && Model && Model.Drawables != null)
             {
-                // Create renders and apply it to backing field...
-                var drawables = this
-                .FindCubismModel()
-                .Drawables;
+                var newCount = Model.Drawables.Length;
 
+                if (Model.Offscreens != null)
+                {
+                    newCount += Model.Offscreens.Length;
+                }
 
-                renderers = drawables.AddComponentEach<CubismRenderer>();
-
-                // Store renderers.
-                Renderers = renderers;
-
+                if (_renderers.Length != newCount)
+                {
+                    _renderers = null;
+                }
             }
 
-            if (renderers == null)
+            // Try to get renderers.
+            var renderers = _renderers;
+            TryInitializeRenderers(renderers);
+
+            if (_renderers == null
+                || _renderers.Length < 1)
             {
                 return;
             }
 
             // Make sure renderers are initialized.
-            for (var i = 0; i < renderers.Length; ++i)
+            for (var i = 0; i < Renderers.Length; ++i)
             {
-                renderers[i].TryInitialize(this);
-            }
+                var targetRenderer = Renderers[i];
+                targetRenderer.TryInitialize(this);
+                if (!HasRootPartOffscreen)
+                {
+                    continue;
+                }
 
+                HasRootPartOffscreen = CheckHasRootPartOffscreen(targetRenderer);
+            }
 
             // Initialize sorting layer.
             // We set the backing field here directly because we pull the sorting layer directly from the renderer.
-            _sortingLayerId = renderers[0]
+            _sortingLayerId = Renderers[0]
                 .MeshRenderer
                 .sortingLayerID;
-        }
 
+            OnAfterRenderersInitialize(Renderers);
+
+            IsInitialized = true;
+        }
 
         /// <summary>
         /// Updates opacity if necessary.
@@ -601,24 +651,36 @@ namespace Live2D.Cubism.Rendering
         /// <summary>
         /// Updates Blend Colors if necessary.
         /// </summary>
-        private void UpdateBlendColors()
+        private void UpdateDrawableBlendColors()
         {
-            if (Renderers == null)
+            if (Renderers == null
+                || !IsInitialized)
             {
                 return;
             }
 
             var isMultiplyColorUpdated = false;
             var isScreenColorUpdated = false;
-            _newMultiplyColors ??= new Color[Renderers.Length];
-            _newScreenColors ??= new Color[Renderers.Length];
-            var newMultiplyColors = _newMultiplyColors;
-            var newScreenColors = _newScreenColors;
 
-            for (int i = 0; i < Renderers.Length; i++)
+            if ((_newMultiplyColors?.Length ?? 0) != Renderers.Length)
             {
-                var isUseUserMultiplyColor = (Renderers[i].OverwriteFlagForDrawableMultiplyColors ||
-                                        OverwriteFlagForModelMultiplyColors);
+                _newMultiplyColors = new Color[Renderers.Length];
+            }
+
+            if ((_newScreenColors?.Length ?? 0) != Renderers.Length)
+            {
+                _newScreenColors = new Color[Renderers.Length];
+            }
+
+            for (var i = 0; i < Renderers.Length; i++)
+            {
+                if (!Renderers[i])
+                {
+                    continue;
+                }
+
+                var isUseUserMultiplyColor = (Renderers[i].DrawObjectMultiplyColorEnabled ||
+                                              MultiplyColorEnabled);
 
                 if (isUseUserMultiplyColor)
                 {
@@ -644,11 +706,11 @@ namespace Live2D.Cubism.Rendering
                     isMultiplyColorUpdated = true;
                 }
 
-                newMultiplyColors[i] = Renderers[i].MultiplyColor;
+                _newMultiplyColors[i] = Renderers[i].MultiplyColor;
                 Renderers[i].LastIsUseUserMultiplyColor = isUseUserMultiplyColor;
 
-                var isUseUserScreenColor = (Renderers[i].OverwriteFlagForDrawableScreenColors ||
-                                             OverwriteFlagForModelScreenColors);
+                var isUseUserScreenColor = (Renderers[i].DrawObjectScreenColorEnabled ||
+                                            ScreenColorEnabled);
 
                 if (isUseUserScreenColor)
                 {
@@ -674,18 +736,43 @@ namespace Live2D.Cubism.Rendering
                     isScreenColorUpdated = true;
                 }
 
-                newScreenColors[i] = Renderers[i].ScreenColor;
+                _newScreenColors[i] = Renderers[i].ScreenColor;
                 Renderers[i].LastIsUseUserScreenColors = isUseUserScreenColor;
             }
 
             if (MultiplyColorHandler != null && isMultiplyColorUpdated)
             {
-                MultiplyColorHandlerInterface.OnBlendColorDidChange(this, newMultiplyColors);
+                MultiplyColorHandlerInterface.OnBlendColorDidChange(this, _newMultiplyColors);
             }
 
             if (ScreenColorHandler != null && isScreenColorUpdated)
             {
-                ScreenColorHandlerInterface.OnBlendColorDidChange(this, newScreenColors);
+                ScreenColorHandlerInterface.OnBlendColorDidChange(this, _newScreenColors);
+            }
+        }
+
+        /// <summary>
+        /// Updates <see cref="DidChangeSorting"/> from direction changes.
+        /// </summary>
+        internal void UpdateDidChangeSortingFromZ(Vector3 cameraPosition)
+        {
+            // Return early if not sorting by depth.
+            if (!SortingMode.SortByDepth())
+            {
+                return;
+            }
+
+            for (var i = 0; i < Renderers?.Length; i++)
+            {
+                var cubismRenderer = Renderers[i];
+
+                if (!cubismRenderer)
+                {
+                    continue;
+                }
+
+                // Check if direction updated from last sorted.
+                DidChangeSorting |= cubismRenderer.DidUpdateDirectionFromLastSorted(cameraPosition);
             }
         }
 
@@ -720,14 +807,13 @@ namespace Live2D.Cubism.Rendering
             UpdateOpacity();
 
             // Updates Blend Colors if necessary.
-            UpdateBlendColors();
+            UpdateDrawableBlendColors();
 
             // Return early in case no camera is to be faced.
             if (CameraToFace == null)
             {
                 return;
             }
-
 
             // Face camera.
             DrawablesRootTransform.rotation = (Quaternion.LookRotation(CameraToFace.transform.forward, Vector3.up));
@@ -750,18 +836,44 @@ namespace Live2D.Cubism.Rendering
         private void OnEnable()
         {
             // Fail silently.
-            if (Model == null)
+            if (!Model)
             {
                 return;
             }
 
+            CurrentOffscreenUnmanagedIndex = -1;
 
             // Make sure renderers are available.
-            TryInitializeRenderers();
+            if (!IsInitialized)
+            {
+                Model.Revive();
+                TryInitialize();
+            }
 
 
             // Register listener.
             Model.OnDynamicDrawableData += OnDynamicDrawableData;
+
+#if UNITY_EDITOR
+            if (!Application.isPlaying)
+            {
+                Model.ForceUpdateNow();
+
+                for (var drawableIndex = 0; drawableIndex < DrawableRenderers.Length; drawableIndex++)
+                {
+                    DrawableRenderers[drawableIndex].SwapMeshes();
+                }
+            }
+#endif
+
+            if (GetComponent<ICubismRenderingInterceptor>() != null)
+            {
+                // Do not register at common controller when a rendering interceptor is attached.
+                return;
+            }
+
+            // Register at common controller.
+            CubismRenderControllerGroup.GetInstance().AddRenderController(this);
         }
 
         /// <summary>
@@ -770,17 +882,19 @@ namespace Live2D.Cubism.Rendering
         private void OnDisable()
         {
             // Fail silently.
-            if (Model == null)
+            if (!Model)
             {
                 return;
             }
 
-
             // Deregister listener.
             Model.OnDynamicDrawableData -= OnDynamicDrawableData;
+
+            // Deregister at common controller.
+            CubismRenderControllerGroup.GetInstance().RemoveRenderController(this);
         }
 
-        #endregion
+#endregion
 
         #region Cubism Event Handling
 
@@ -795,6 +909,19 @@ namespace Live2D.Cubism.Rendering
             }
         }
 
+        private static int IndexOfDrawable(CubismRenderer[] renderers, int unmanagedIndex)
+        {
+            for (var i = 0; i < renderers.Length; i++)
+            {
+                if (renderers[i].Drawable.UnmanagedIndex == unmanagedIndex)
+                {
+                    return i;
+                }
+            }
+
+            return -1;
+        }
+
         /// <summary>
         /// Called whenever new render data is available.
         /// </summary>
@@ -804,54 +931,57 @@ namespace Live2D.Cubism.Rendering
         {
             // Get drawables.
             var drawables = sender.Drawables;
-            var renderers = Renderers;
+            var renderers = DrawableRenderers;
 
 
             // Handle render data changes.
-            for (var i = 0; i < data.Length; ++i)
+            for (var dataIndex = 0; dataIndex < data.Length; ++dataIndex)
             {
+                var rendererIndex = IndexOfDrawable(renderers, dataIndex);
+
+                // Skip if no renderer found.
+                if (rendererIndex < 0) {
+                    continue;
+                }
+
                 // Controls whether mesh buffers are to be swapped.
                 var swapMeshes = false;
 
-
                 // Update visibility if last SwapInfo flag is true.
-                renderers[i].UpdateVisibility();
-
+                renderers[rendererIndex].UpdateVisibility();
 
                 // Update render order if last SwapInfo flags is true.
-                renderers[i].UpdateRenderOrder();
-
+                renderers[rendererIndex].UpdateRenderOrder();
 
                 // Skip completely non-dirty data.
-                if (!data[i].IsAnyDirty)
+                if (!data[dataIndex].IsAnyDirty)
                 {
                     continue;
                 }
 
 
                 // Update visibility.
-                if (data[i].IsVisibilityDirty)
+                if (data[dataIndex].IsVisibilityDirty)
                 {
-                    renderers[i].OnDrawableVisiblityDidChange(data[i].IsVisible);
+                    renderers[rendererIndex].OnDrawableVisiblityDidChange(data[dataIndex].IsVisible);
 
                     swapMeshes = true;
                 }
 
 
                 // Update render order.
-                if (data[i].IsRenderOrderDirty)
+                if (data[dataIndex].IsRenderOrderDirty)
                 {
-                    renderers[i].OnDrawableRenderOrderDidChange(data[i].RenderOrder);
-
-
+                    renderers[rendererIndex].OnDrawableRenderOrderDidChange(data[dataIndex].RenderOrder);
+                    DidChangeDrawableRenderOrder = true;
                     swapMeshes = true;
                 }
 
 
                 // Update opacity.
-                if (data[i].IsOpacityDirty)
+                if (data[dataIndex].IsOpacityDirty)
                 {
-                    renderers[i].OnDrawableOpacityDidChange(data[i].Opacity);
+                    renderers[rendererIndex].OnDrawableOpacityDidChange(data[dataIndex].Opacity);
 
 
                     swapMeshes = true;
@@ -859,9 +989,9 @@ namespace Live2D.Cubism.Rendering
 
 
                 // Update vertex positions.
-                if (data[i].AreVertexPositionsDirty)
+                if (data[dataIndex].AreVertexPositionsDirty)
                 {
-                    renderers[i].OnDrawableVertexPositionsDidChange(data[i].VertexPositions);
+                    renderers[rendererIndex].OnDrawableVertexPositionsDidChange(data[dataIndex].VertexPositions);
 
 
                     swapMeshes = true;
@@ -872,7 +1002,7 @@ namespace Live2D.Cubism.Rendering
                 // [INV] Swapping only half of the meshes might improve performance even. Would that be visually feasible?
                 if (swapMeshes)
                 {
-                    renderers[i].SwapMeshes();
+                    renderers[rendererIndex].SwapMeshes();
                 }
             }
 
@@ -894,39 +1024,55 @@ namespace Live2D.Cubism.Rendering
 
             var isMultiplyColorUpdated = false;
             var isScreenColorUpdated = false;
-            _newMultiplyColors ??= new Color[Renderers.Length];
-            _newScreenColors ??= new Color[Renderers.Length];
+            _newMultiplyColors ??= new Color[renderers.Length];
+            _newScreenColors ??= new Color[renderers.Length];
             var newMultiplyColors = _newMultiplyColors;
             var newScreenColors = _newScreenColors;
 
-            for (var i = 0; i < data.Length; ++i)
+            for (var dataIndex = 0; dataIndex < data.Length; ++dataIndex)
             {
-                var isUseModelMultiplyColor = !(renderers[i].OverwriteFlagForDrawableMultiplyColors ||
-                                                OverwriteFlagForModelMultiplyColors);
+                var rendererIndex = IndexOfDrawable(renderers, dataIndex);
+
+                // Skip if no renderer found.
+                if (rendererIndex < 0)
+                {
+                    continue;
+                }
+
+                var isUseModelMultiplyColor = !(renderers[rendererIndex].DrawObjectMultiplyColorEnabled ||
+                                                MultiplyColorEnabled);
 
                 // Skip processing when not using model colors.
-                if (data[i].IsBlendColorDirty && isUseModelMultiplyColor)
+                if (data[dataIndex].IsBlendColorDirty && isUseModelMultiplyColor)
                 {
-                    renderers[i].ApplyMultiplyColor();
+                    renderers[rendererIndex].ApplyMultiplyColor();
                     isMultiplyColorUpdated = true;
                 }
 
-                newMultiplyColors[i] = renderers[i].MultiplyColor;
+                newMultiplyColors[rendererIndex] = renderers[rendererIndex].MultiplyColor;
             }
 
-            for (var i = 0; i < data.Length; ++i)
+            for (var dataIndex = 0; dataIndex < data.Length; ++dataIndex)
             {
-                var isUseModelScreenColor = !(renderers[i].OverwriteFlagForDrawableScreenColors ||
-                                              OverwriteFlagForModelScreenColors);
+                var rendererIndex = IndexOfDrawable(renderers, dataIndex);
+
+                // Skip if no renderer found.
+                if (rendererIndex < 0)
+                {
+                    continue;
+                }
+
+                var isUseModelScreenColor = !(renderers[rendererIndex].DrawObjectScreenColorEnabled ||
+                                              ScreenColorEnabled);
 
                 // Skip processing when not using model colors.
-                if (data[i].IsBlendColorDirty && isUseModelScreenColor)
+                if (data[dataIndex].IsBlendColorDirty && isUseModelScreenColor)
                 {
-                    renderers[i].ApplyScreenColor();
+                    renderers[rendererIndex].ApplyScreenColor();
                     isScreenColorUpdated = true;
                 }
 
-                newScreenColors[i] = renderers[i].ScreenColor;
+                newScreenColors[rendererIndex] = renderers[rendererIndex].ScreenColor;
             }
 
             // Pass blend color changes to handler (if available).

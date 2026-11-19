@@ -29,19 +29,26 @@ namespace MajdataPlay.Scenes.Game.Notes.Behaviours
         protected const float SLIDE_JUDGE_CLASSIC_LATE_SEG_2ND_GREAT_MSEC = 20 * FRAME_LENGTH_MSEC;   // 20f
         protected const float SLIDE_JUDGE_CLASSIC_LATE_SEG_3RD_GREAT_MSEC = 24 * FRAME_LENGTH_MSEC;   // 24f
 
-        protected const float SLIDE_JUDGE_CLASSIC_SEG_1ST_PERFECT_MSEC = 4 * FRAME_LENGTH_MSEC;  // 4f
-        protected const float SLIDE_JUDGE_CLASSIC_SEG_2ND_PERFECT_MSEC = 8 * FRAME_LENGTH_MSEC;  // 8f
-        protected const float SLIDE_JUDGE_CLASSIC_SEG_3RD_PERFECT_MSEC = 12 * FRAME_LENGTH_MSEC; // 12f
-        protected const float SLIDE_JUDGE_CLASSIC_SEG_1ST_GREAT_MSEC = 16 * FRAME_LENGTH_MSEC;   // 16f
-        protected const float SLIDE_JUDGE_CLASSIC_SEG_2ND_GREAT_MSEC = 20 * FRAME_LENGTH_MSEC;   // 20f
-        protected const float SLIDE_JUDGE_CLASSIC_SEG_3RD_GREAT_MSEC = 24 * FRAME_LENGTH_MSEC;   // 24f
         protected const float SLIDE_JUDGE_GOOD_AREA_MSEC = 36 * FRAME_LENGTH_MSEC;               // 36f
 
-        protected const int HOLD_STATE_HEAD_MISS_OR_NOT_JUDGED = -3;
-        protected const int HOLD_STATE_HEAD_JUDGED_AND_NOT_FEEDBACK = -2;
-        protected const int HOLD_STATE_HEAD_JUDGED = -1;
+        protected const int HOLD_HEAD_STATE_NOT_JUDGED = 0;
+        protected const int HOLD_HEAD_STATE_JUDGED_AND_NOT_FEEDBACK = 1;
+        protected const int HOLD_HEAD_STATE_JUDGED = 2;
+        protected const int HOLD_STATE_NONE = -1;
         protected const int HOLD_STATE_RELEASED = 0;
         protected const int HOLD_STATE_PRESSED = 1;
+
+        protected const float HOLD_CLASSIC_END_JUDGE_PERFECT_FAST_AREA_MSEC = 9 * FRAME_LENGTH_MSEC;
+        protected const float HOLD_CLASSIC_END_JUDGE_PERFECT_LATE_AREA_MSEC = 14 * FRAME_LENGTH_MSEC;
+
+        protected const float HOLD_HEAD_IGNORE_LENGTH_SEC = 6 * FRAME_LENGTH_SEC;
+        protected const float HOLD_TAIL_IGNORE_LENGTH_SEC = 12 * FRAME_LENGTH_SEC;
+        protected const float TOUCH_HOLD_HEAD_IGNORE_LENGTH_SEC = 15 * FRAME_LENGTH_SEC;
+        protected const float TOUCH_HOLD_TAIL_IGNORE_LENGTH_SEC = 12 * FRAME_LENGTH_SEC;
+        protected const float DELUXE_HOLD_RELEASE_IGNORE_TIME_SEC = 2 * FRAME_LENGTH_SEC;
+        protected const float CLASSIC_HOLD_ALLOW_OVER_LENGTH_SEC = 20 * FRAME_LENGTH_SEC;
+
+
         public float Length
         {
             get => _length;
@@ -50,7 +57,7 @@ namespace MajdataPlay.Scenes.Game.Notes.Behaviours
 
         [ReadOnlyField]
         [SerializeField]
-        protected float _playerReleaseTimeSec = 0;
+        protected float PlayerReleaseTimeSec = 0;
         [ReadOnlyField]
         [SerializeField]
         protected float _length = 1f;
@@ -65,12 +72,13 @@ namespace MajdataPlay.Scenes.Game.Notes.Behaviours
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         protected JudgeGrade HoldEndJudge(in JudgeGrade headGrade, in float ingoreTimeSec)
         {
-            if (!_isJudged)
+            if (!IsJudged)
+            {
                 return headGrade;
+            }
 
-            var offset = (int)_judgeResult > 7 ? 0 : _judgeDiff;
-            var realityHT = (Length - ingoreTimeSec - offset / 1000f).Clamp(0, Length - 0.3f);
-            var percent = ((realityHT - _playerReleaseTimeSec) / realityHT).Clamp(0, 1);
+            var realityHT = (Length - ingoreTimeSec).Clamp(0, Length - 0.3f);
+            var percent = ((realityHT - PlayerReleaseTimeSec) / realityHT).Clamp(0, 1);
 
             if (realityHT <= 0)
             {
@@ -120,7 +128,7 @@ namespace MajdataPlay.Scenes.Game.Notes.Behaviours
                         switch (headGrade)
                         {
                             case JudgeGrade.Perfect:
-                                if (_judgeDiff >= 0)
+                                if (JudgeDiff >= 0)
                                 {
                                     return JudgeGrade.LatePerfect2nd;
                                 }
@@ -155,7 +163,7 @@ namespace MajdataPlay.Scenes.Game.Notes.Behaviours
                         switch (headGrade)
                         {
                             case JudgeGrade.Perfect:
-                                if (_judgeDiff >= 0)
+                                if (JudgeDiff >= 0)
                                 {
                                     return JudgeGrade.LateGreat2nd;
                                 }
@@ -189,7 +197,7 @@ namespace MajdataPlay.Scenes.Game.Notes.Behaviours
                         switch (headGrade)
                         {
                             case JudgeGrade.Perfect:
-                                if (_judgeDiff >= 0)
+                                if (JudgeDiff >= 0)
                                 {
                                     return JudgeGrade.LateGood;
                                 }
@@ -221,7 +229,7 @@ namespace MajdataPlay.Scenes.Game.Notes.Behaviours
                         switch (headGrade)
                         {
                             case JudgeGrade.Perfect:
-                                if (_judgeDiff >= 0)
+                                if (JudgeDiff >= 0)
                                 {
                                     return JudgeGrade.LateGood;
                                 }
@@ -256,7 +264,7 @@ namespace MajdataPlay.Scenes.Game.Notes.Behaviours
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         protected JudgeGrade HoldClassicEndJudge(in JudgeGrade headGrade,float offset)
         {
-            if (!_isJudged)
+            if (!IsJudged)
             {
                 return headGrade;
             }

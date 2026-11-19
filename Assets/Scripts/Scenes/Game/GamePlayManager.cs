@@ -1,5 +1,6 @@
 using Cysharp.Text;
 using Cysharp.Threading.Tasks;
+using MajdataPlay.Diagnostics;
 using MajdataPlay.Editor;
 using MajdataPlay.Extensions;
 using MajdataPlay.IO;
@@ -17,18 +18,18 @@ using MajSimai;
 using Newtonsoft.Json.Linq;
 using System;
 using System.Linq;
-using System.Runtime.InteropServices;
 using System.Threading;
 using System.Threading.Tasks;
 using TMPro;
 using UnityEngine;
 using UnityEngine.Profiling;
+using UnityEngine.Serialization;
 using UnityEngine.UI;
 
 namespace MajdataPlay.Scenes.Game
 {
 #nullable enable
-    public class GamePlayManager : MonoBehaviour, INoteController
+    public class GamePlayManager : MajBehaviour, INoteController
     {
         public float NoteSpeed { get; private set; } = 7f;
         public float TouchSpeed { get; private set; } = 7f;
@@ -36,7 +37,7 @@ namespace MajdataPlay.Scenes.Game
         {
             get
             {
-                return (_setting?.Judge.Mode ?? JudgeModeOption.Modern) == JudgeModeOption.Classic;
+                return (_userSettings?.Judge.Mode ?? JudgeModeOption.Modern) == JudgeModeOption.Classic;
             }
         }
         // Timeline
@@ -68,9 +69,9 @@ namespace MajdataPlay.Scenes.Game
             get => ModInfo.AutoPlay;
         }
 
-        public JudgeGrade AutoplayGrade { get; private set; } =  JudgeGrade.Perfect;
+        public JudgeGrade AutoplayGrade { get; private set; } = JudgeGrade.Perfect;
         public GameModInfo ModInfo { get; private set; }
-        public float PlaybackSpeed 
+        public float PlaybackSpeed
         {
             get => ModInfo.PlaybackSpeed;
         }
@@ -79,145 +80,178 @@ namespace MajdataPlay.Scenes.Game
         public bool IsPracticeMode => _gameInfo.IsPracticeMode;
         internal GameMode Mode => _gameInfo.Mode;
         public MaiScore? HistoryScore { get; private set; }
-        public Material BreakMaterial { get; } = MajEnv.BreakMaterial;
-        public Material DefaultMaterial { get; } = MajEnv.DefaultMaterial;
-        public Material HoldShineMaterial { get; } = MajEnv.HoldShineMaterial;
-
-        public GameObject AllPerfectAnimation;
-        public GameObject FullComboAnimation;
-        public GameObject TrackSkipAnimation;
-
+        public Material BreakMaterial { get; private set; }
+        public Material DefaultMaterial { get; private set; }
+        public Material HoldShineMaterial { get; private set; }
 
         [SerializeField]
-        Sprite _maskSpriteA;
+        private GameObject _allPerfectAnimation;
         [SerializeField]
-        Sprite _maskSpriteB;
+        private GameObject _fullComboAnimation;
         [SerializeField]
-        Animator _bgInfoHeaderAnim;
-        [SerializeField]
-        GameSetting _setting = MajInstances.Settings;
-        [SerializeField]
-        GameObject _skipBtn;
-        [SerializeField]
-        SpriteMask _noteMask;
-        [SerializeField]
-        RectTransform _mainDisplayer;
-        [ReadOnlyField]
-        [SerializeField]
-        float _thisFrameSec = 0f;
-        [ReadOnlyField]
-        [SerializeField]
-        float _thisFixedUpdateSec = 0f;
-        [ReadOnlyField]
-        [SerializeField]
-        float _firstNoteAppearTiming = 0f;
-        [ReadOnlyField]
-        [SerializeField]
-        float _audioStartTime = -114514;
-        int _chartRotation = 0;
+        private GameObject _gameOverAnimation;
 
-        bool _isTrackSkipAvailable = MajEnv.Settings?.Game.TrackSkip ?? false;
-        AutoTrackSkipOption _autoTrackSkipOption = MajEnv.Settings?.Game.AutoTrackSkip ?? AutoTrackSkipOption.Disabled;
-        AutoQuickRetryOption _autoQuickRetryOption = MajEnv.Settings?.Game.AutoQuickRetry ?? AutoQuickRetryOption.Disabled;
-        bool _isFastRetryAvailable = MajEnv.Settings?.Game.FastRetry ?? false;
-        float? _allNotesFinishedTiming = null;
-        float _2367PressTime = 0;
-        float _3456PressTime = 0;
-        float _p1SkipTime = 0;
-        float _devicePlaybackOffset = 0f;
+        [SerializeField]
+        [FormerlySerializedAs("chartVisualDisplayer")]
+        private ChartVisualDisplayer _chartVisualDisplayer;
+
+        [SerializeField]
+        [FormerlySerializedAs("timeDisplayer")]
+        private TimeDisplayer _timeDisplayer;
+
+        [SerializeField]
+        [FormerlySerializedAs("chartInfoDisplayer")]
+        private ChartInfoDisplayer _chartInfoDisplayer;
+
+        [SerializeField]
+        [FormerlySerializedAs("levelCircleDisplayer")]
+        private Image _levelCircleDisplayer;
+
+        [SerializeField]
+        [FormerlySerializedAs("levelBGDisplayer")]
+        private Image _levelBGDisplayer;
+
+        [SerializeField]
+        private Sprite _maskSpriteA;
+        [SerializeField]
+        private Sprite _maskSpriteB;
+        [SerializeField]
+        private Animator _bgInfoHeaderAnim;
+        private UserSetting _userSettings;
+        private SystemSetting _systemSettings;
+        [SerializeField]
+        private GameObject _skipBtn;
+        [SerializeField]
+        private SpriteMask _noteMask;
+        [SerializeField]
+        private RectTransform _mainDisplayer;
+        [ReadOnlyField]
+        [SerializeField]
+        private float _thisFrameSec = 0f;
+        [ReadOnlyField]
+        [SerializeField]
+        private float _thisFixedUpdateSec = 0f;
+        [ReadOnlyField]
+        [SerializeField]
+        private float _firstNoteAppearTiming = 0f;
+        [ReadOnlyField]
+        [SerializeField]
+        private float _audioStartTime = -114514;
+        private int _chartRotation = 0;
+
+        /// <summary>The controller that owns gameplay shortcut input and hold state.</summary>
+        private FnController _fnController = null!;
+
+        private Accurate _historyAccurate;
+
+        private bool _isEnforceFastRetry = false;
+        private bool _isManualStartGame = false;
+        private float? _allNotesFinishedTiming = null;
+        private EnforceGameFailureCondition _enforceGameFailureCondition = EnforceGameFailureCondition.Disabled;
+
+        private float _devicePlaybackOffset = 0f;
 
         // Offset
-        float _chartOffset = 0f;
+        private float _chartOffset = 0f;
         /// <summary>
         /// Setting - Judge - AudioOffset
         /// </summary>
-        float _audioTimeOffsetSec = 0f;
-        float _displayOffsetSec = 0f;
+        private float _audioTimeOffsetSec = 0f;
+        private float _displayOffsetSec = 0f;
 
         // From simai command &mv_seek
-        float _videoOffsetSec = 0f;
+        private float _videoOffsetSec = 0f;
         // From simai command &mv_wait
-        float _videoWaitTimeSec = 0f;
+        private float _videoWaitTimeSec = 0f;
 
-        Task _generateAnswerSFXTask = Task.CompletedTask;
-        TextMeshProUGUI _errText;
-        MajTimer _timer = MajTimeline.CreateTimer();
-        float _audioTrackStartAt = 0f;
+        private Task _generateAnswerSFXTask = Task.CompletedTask;
+        private TextMeshProUGUI _errText;
+        private MajTimer _timer = MajTimeline.CreateTimer();
+        private float _audioTrackStartAt = 0f;
 
-        GameInfo _gameInfo;
+        private GameInfo _gameInfo;
 
-        SimaiFile _simaiFile;
-        SimaiChart _chart;
-        ChartSetting _chartSetting;
-        ISongDetail _songDetail;
+        private SimaiFile _simaiFile;
+        private SimaiChart _chart;
+        private ChartSetting _chartSetting;
+        private ISongDetail _songDetail;
 
-        float _trackVolume = 1f;
+        private float _trackVolume = 1f;
 
-        GameplayScreenRotationAngleOption _screenRotationAngle = GameplayScreenRotationAngleOption.Zero;
+        private GameplayScreenRotationAngleOption _screenRotationAngle = GameplayScreenRotationAngleOption.Zero;
 
-        AudioSampleWrap? _audioSample = null;
+        private AudioSampleWrap? _audioSample = null;
 
-        BGManager _bgManager;
-        NoteLoader _noteLoader;
-        NoteManager _noteManager;
-        NoteAudioManager _noteAudioManager;
-        NotePoolManager _notePoolManager;
-        NoteEffectPool _noteEffectPool;
-        ObjectCounter _objectCounter;
-        TimeDisplayer _timeDisplayer;
-        RecorderStatusDisplayer _recorderStateDisplayer;
+        private BGManager _bgManager;
+        private NoteLoader _noteLoader;
+        private NoteManager _noteManager;
+        private NoteAudioManager _noteAudioManager;
+        private NotePoolManager _notePoolManager;
+        private NoteEffectPool _noteEffectPool;
+        private ObjectCounter _objectCounter;
+        private RecorderStatusDisplayer _recorderStateDisplayer;
 
-        readonly CancellationTokenSource _cts = new();
-        readonly ListConfig _listConfig = MajEnv.RuntimeConfig?.List ?? new();
-        readonly SceneSwitcher _sceneSwitcher = MajInstances.SceneSwitcher;
+        private readonly CancellationTokenSource _cts = new();
+        private readonly ListConfig _listConfig = MajEnv.RuntimeConfig?.List ?? new();
+        private readonly SceneSwitcher _sceneSwitcher = MajInstances.SceneSwitcher;
 
-        readonly static Utf16PreparedFormat<float, float> ERROR_TEXT_FORMAT = ZString.PrepareUtf16<float, float>("Delta\nAudio {0:F4}\nVideo {1:F4}");
+        private static readonly Utf16PreparedFormat<float, float, float> ERROR_TEXT_FORMAT = ZString.PrepareUtf16<float, float, float>("Audio {0:F4}\nVideo {1:F4}\n DEV {2:F4}");
 
         #region GameLoading
 
-        void Awake()
+        protected override void Awake()
         {
+            base.Awake();
+            var gameplayCamera = Camera.main;
+            if (gameplayCamera != null)
+            {
+                gameplayCamera.transparencySortMode = TransparencySortMode.CustomAxis;
+                gameplayCamera.transparencySortAxis = Vector3.forward;
+            }
             Majdata<GamePlayManager>.Instance = this;
             Majdata<INoteController>.Instance = this;
             Majdata<INoteTimeProvider>.Instance = this;
             _gameInfo = Majdata<GameInfo>.Instance!;
+            _userSettings = MajEnv.UserSettings;
+            _systemSettings = MajEnv.SystemSettings;
+            _enforceGameFailureCondition = _userSettings.Game.EnforceGameFailure;
+            _isEnforceFastRetry = (int)_enforceGameFailureCondition % 2 == 0;
+            _isManualStartGame = _userSettings.Game.ManualStartGame;
+            DefaultMaterial = RuntimeDatabase.Note.DefaultMaterial;
+            BreakMaterial = RuntimeDatabase.Note.BreakMaterial;
+            HoldShineMaterial = RuntimeDatabase.Note.HoldShineMaterial;
             if (_gameInfo is null || _gameInfo.Current is null)
             {
                 throw new ArgumentNullException(nameof(_gameInfo));
             }
             //print(MajInstances.GameManager.SelectedIndex);
-            _screenRotationAngle = _setting.Display.GameplayScreenRotationAngle;
+            _screenRotationAngle = _systemSettings.Rendering.GameplayScreenRotationAngle;
             _songDetail = _gameInfo.Current;
             HistoryScore = ScoreManager.GetScore(_songDetail, _listConfig.SelectedDiff);
+            if (HistoryScore is not null)
+            {
+                _historyAccurate = HistoryScore.Acc;
+            }
             _timer = MajTimeline.CreateTimer();
             _chartSetting = _gameInfo.ChartSettings;
-            if(_setting.Debug.OffsetUnit == OffsetUnitOption.Second)
+            var diffColor = RuntimeDatabase.DifficultyColors[(int)_gameInfo.CurrentLevel];
+            _levelCircleDisplayer.color = diffColor;
+            _levelBGDisplayer.color = diffColor;
+            if (_userSettings.Judge.OffsetUnit == OffsetUnitOption.Second)
             {
-                _audioTimeOffsetSec = _setting.Judge.AudioOffset;
+                _audioTimeOffsetSec = _userSettings.Judge.AudioOffset;
                 _audioTimeOffsetSec += _chartSetting.AudioOffset;
-                _displayOffsetSec = _setting.Debug.DisplayOffset;
+                _displayOffsetSec = _systemSettings.Debug.DisplayOffset;
             }
             else
             {
-                _audioTimeOffsetSec = _setting.Judge.AudioOffset * MajEnv.FRAME_LENGTH_SEC;
+                _audioTimeOffsetSec = _userSettings.Judge.AudioOffset * MajEnv.FRAME_LENGTH_SEC;
                 _audioTimeOffsetSec += _chartSetting.AudioOffset * MajEnv.FRAME_LENGTH_SEC;
-                _displayOffsetSec = _setting.Debug.DisplayOffset * MajEnv.FRAME_LENGTH_SEC;
+                _displayOffsetSec = _systemSettings.Debug.DisplayOffset * MajEnv.FRAME_LENGTH_SEC;
             }
-            switch(_screenRotationAngle)
-            {
-                case GameplayScreenRotationAngleOption._90:
-                    _mainDisplayer.rotation = Quaternion.Euler(0, 0, -90);
-                    break;
-                case GameplayScreenRotationAngleOption._180:
-                    _mainDisplayer.rotation = Quaternion.Euler(0, 0, -180);
-                    break;
-                case GameplayScreenRotationAngleOption._270:
-                    _mainDisplayer.rotation = Quaternion.Euler(0, 0, -270);
-                    break;
-            }
-            _trackVolume = (MajEnv.Settings.Audio.Volume.Track + _chartSetting.TrackVolumeOffset).Clamp(0, 2);
+            _trackVolume = (MajEnv.UserSettings.Volume.Track + _chartSetting.TrackVolumeOffset).Clamp(0, 2);
 #if !UNITY_EDITOR && UNITY_STANDALONE
-            if(_setting.Debug.HideCursorInGame)
+            if(_systemSettings.Common.HideCursorInGame)
             {
                 Cursor.visible = false;
             }
@@ -232,12 +266,24 @@ namespace MajdataPlay.Scenes.Game
                 Destroy(GameObject.Find("EventSystem"));
             }
 #if UNITY_ANDROID || UNITY_IOS
-            InputManager.UseOuterTouchAsSensor = _setting.Game.ButtonRingForTouch;
+            InputManager.UseOuterTouchAsSensor = _userSettings.Game.ButtonRingForTouch;
+            InputManager.UseGameplayTouchEnhancementFeatures = true;
 #endif
             InputManager.TouchButtonRingEdge = 5.4f;
-            MajInstances.SceneSwitcher.HideMV();
+            InputManager.Override_TouchSimulationRadius = default;
+            InputManager.Override_TouchAAreaExtraRadius = default;
+            InputManager.Override_TouchBAreaExtraRadius = default;
+            InputManager.Override_TouchCAreaExtraRadius = default;
+            InputManager.Override_TouchDAreaExtraRadius = default;
+            InputManager.Override_TouchEAreaExtraRadius = default;
+
+            MajInstances.BackgroundVideo.Hide();
+
+            _chartInfoDisplayer.SetMetadata(_songDetail, _gameInfo.CurrentLevel);
+            _fnController = GetComponent<FnController>();
+            _fnController.Init(this);
         }
-        void Start()
+        private void Start()
         {
             _noteManager = Majdata<NoteManager>.Instance!;
             _bgManager = Majdata<BGManager>.Instance!;
@@ -250,12 +296,25 @@ namespace MajdataPlay.Scenes.Game
             _recorderStateDisplayer = Majdata<RecorderStatusDisplayer>.Instance!;
 
             _errText = GameObject.Find("ErrText").GetComponent<TextMeshProUGUI>();
-            _chartRotation = _setting.Game.Rotation.Clamp(-7, 7);
-            
+            _chartRotation = _userSettings.Game.Rotation.Clamp(-7, 7);
+
+            switch (_screenRotationAngle)
+            {
+                case GameplayScreenRotationAngleOption._90:
+                    _mainDisplayer.rotation = Quaternion.Euler(0, 0, -90);
+                    break;
+                case GameplayScreenRotationAngleOption._180:
+                    _mainDisplayer.rotation = Quaternion.Euler(0, 0, -180);
+                    break;
+                case GameplayScreenRotationAngleOption._270:
+                    _mainDisplayer.rotation = Quaternion.Euler(0, 0, -270);
+                    break;
+            }
+
             InitGame().Forget();
             return;
         }
-        void LoadDanModSettings()
+        private void LoadDanModSettings()
         {
             var danInfo = _gameInfo.DanInfo;
             var playbackSpeed = ModInfo.PlaybackSpeed;
@@ -269,7 +328,7 @@ namespace MajdataPlay.Scenes.Game
             var judgeStyle = ModInfo.JudgeStyle;
             var subdivideSlideJudgeGrade = ModInfo.SubdivideSlideJudgeGrade;
             var noteMask = ModInfo.NoteMask;
-            foreach (var (k,v) in danInfo!.Mods)
+            foreach (var (k, v) in danInfo!.Mods)
             {
                 switch (k)
                 {
@@ -298,26 +357,54 @@ namespace MajdataPlay.Scenes.Game
                                 bool value = v.ToObject<bool>();
                                 switch (k)
                                 {
-                                    case "AllBreak": isAllBreak = value; break;
-                                    case "AllEx": isAllEx = value; break;
-                                    case "AllTouch": isAllTouch = value; break;
-                                    case "ButtonRingForTouch": isUseButtonRingForTouch = value; break;
-                                    case "IsSlideNoHead": isSlideNoHead = value; break;
-                                    case "IsSlideNoTrack": isSlideNoTrack = value; break;
-                                    case "SubdivideSlideJudgeGrade": subdivideSlideJudgeGrade = value; break;
+                                    case "AllBreak":
+                                        isAllBreak = value;
+                                        break;
+                                    case "AllEx":
+                                        isAllEx = value;
+                                        break;
+                                    case "AllTouch":
+                                        isAllTouch = value;
+                                        break;
+                                    case "ButtonRingForTouch":
+                                        isUseButtonRingForTouch = value;
+                                        break;
+                                    case "IsSlideNoHead":
+                                        isSlideNoHead = value;
+                                        break;
+                                    case "IsSlideNoTrack":
+                                        isSlideNoTrack = value;
+                                        break;
+                                    case "SubdivideSlideJudgeGrade":
+                                        subdivideSlideJudgeGrade = value;
+                                        break;
                                 }
                             }
                             else if (bool.TryParse(v.ToString(), out var boolValue))
                             {
                                 switch (k)
                                 {
-                                    case "AllBreak": isAllBreak = boolValue; break;
-                                    case "AllEx": isAllEx = boolValue; break;
-                                    case "AllTouch": isAllTouch = boolValue; break;
-                                    case "ButtonRingForTouch": isUseButtonRingForTouch = boolValue; break;
-                                    case "IsSlideNoHead": isSlideNoHead = boolValue; break;
-                                    case "IsSlideNoTrack": isSlideNoTrack = boolValue; break;
-                                    case "SubdivideSlideJudgeGrade": subdivideSlideJudgeGrade = boolValue; break;
+                                    case "AllBreak":
+                                        isAllBreak = boolValue;
+                                        break;
+                                    case "AllEx":
+                                        isAllEx = boolValue;
+                                        break;
+                                    case "AllTouch":
+                                        isAllTouch = boolValue;
+                                        break;
+                                    case "ButtonRingForTouch":
+                                        isUseButtonRingForTouch = boolValue;
+                                        break;
+                                    case "IsSlideNoHead":
+                                        isSlideNoHead = boolValue;
+                                        break;
+                                    case "IsSlideNoTrack":
+                                        isSlideNoTrack = boolValue;
+                                        break;
+                                    case "SubdivideSlideJudgeGrade":
+                                        subdivideSlideJudgeGrade = boolValue;
+                                        break;
                                 }
                             }
                         }
@@ -366,17 +453,17 @@ namespace MajdataPlay.Scenes.Game
                 SubdivideSlideJudgeGrade = subdivideSlideJudgeGrade
             };
         }
-        void LoadGameMod()
+        private void LoadGameMod()
         {
-            var modsetting = MajInstances.GameManager.Settings.Mod;
-            ModInfo = modsetting;
+            var modsetting = MajInstances.GameManager.SystemSettings.Mod;
+            ModInfo = new GameModInfo(modsetting, _userSettings.Game);
             //AutoplayParam = mod5.Value ?? 7;
         }
         /// <summary>
         /// Parse the chart and load it into memory, or dump it locally if the chart is online
         /// </summary>
         /// <returns></returns>
-        async UniTaskVoid InitGame()
+        private async UniTaskVoid InitGame()
         {
             State = GamePlayStatus.Loading;
             var token = _cts.Token;
@@ -423,22 +510,26 @@ namespace MajdataPlay.Scenes.Game
                         lastPercent = percent;
                         _sceneSwitcher.SetLoadingText($"{"MAJTEXT_DOWNLOADING_PICTURE".i18n()}...\n{percent * 100:F2}%");
                     }
-                    lastPercent = 0;
-                    progress.Reset();
-                    token.ThrowIfCancellationRequested();
-                    _sceneSwitcher.SetLoadingText($"{"MAJTEXT_DOWNLOADING_VIDEO".i18n()}...");
-                    var task4 = _songDetail.GetVideoPathAsync(progress, token: _cts.Token);
-                    while (!task4.IsCompleted)
+                    if (!(_chartSetting.DisableVideoBG || _userSettings.Game.SkipVideoDownload))
                     {
-                        await UniTask.Yield(cancellationToken: token);
-                        var percent = progress.Percent.Clamp(0, 1);
-                        LedRingLoadingUpdate(percent, lastPercent);
-                        lastPercent = percent;
-                        _sceneSwitcher.SetLoadingText($"{"MAJTEXT_DOWNLOADING_VIDEO".i18n()}...\n{percent * 100:F2}%");
+                        lastPercent = 0;
+                        progress.Reset();
+                        token.ThrowIfCancellationRequested();
+                        _sceneSwitcher.SetLoadingText($"{"MAJTEXT_DOWNLOADING_VIDEO".i18n()}...");
+                        var task4 = _songDetail.GetVideoPathAsync(progress, token: _cts.Token);
+                        while (!task4.IsCompleted)
+                        {
+                            await UniTask.Yield(cancellationToken: token);
+                            var percent = progress.Percent.Clamp(0, 1);
+                            LedRingLoadingUpdate(percent, lastPercent);
+                            lastPercent = percent;
+                            _sceneSwitcher.SetLoadingText($"{"MAJTEXT_DOWNLOADING_VIDEO".i18n()}...\n{percent * 100:F2}%");
+                        }
                     }
                     _sceneSwitcher.SetLoadingText(string.Empty);
                 }
 
+                _chartInfoDisplayer.SetCover(await _songDetail.GetCoverAsync(false));
                 await LoadAudioTrack();
                 token.ThrowIfCancellationRequested();
                 await InitBackground();
@@ -465,38 +556,38 @@ namespace MajdataPlay.Scenes.Game
                 await UniTask.Delay(1000);
                 ReturnTo().Forget();
             }
-            catch(InvalidSimaiMarkupException syntaxE)
+            catch (InvalidSimaiMarkupException syntaxE)
             {
                 await UniTask.SwitchToMainThread();
-                MajInstances.SceneSwitcher.SetLoadingText($"{"Invalid syntax".i18n()}\n(at L{syntaxE.Line}:C{syntaxE.Column}) \"{syntaxE.Content}\"\n{syntaxE.Message}", Color.red);
+                MajInstances.SceneSwitcher.SetLoadingText($"{"MAJTEXT_ERR_INVALID_SYNTAX".i18n()}\n(at L{syntaxE.Line}:C{syntaxE.Column}) \"{syntaxE.Content}\"\n{syntaxE.Message}", Color.red);
                 MajDebug.LogError(syntaxE);
                 return;
             }
-            catch(HttpException httpEx)
+            catch (HttpException httpEx)
             {
                 await UniTask.SwitchToMainThread();
                 MajInstances.SceneSwitcher.SetLoadingText("MAJTEXT_ERR_DOWNLOAD_FAILED".i18n(), Color.red);
                 MajDebug.LogError(httpEx);
                 return;
             }
-            catch(InvalidAudioTrackException audioEx)
+            catch (InvalidAudioTrackException audioEx)
             {
                 await UniTask.SwitchToMainThread();
                 MajInstances.SceneSwitcher.SetLoadingText($"{"MAJTEXT_ERR_LOAD_CHART_FAILED".i18n()}\n{audioEx.Message}", Color.red);
                 MajDebug.LogError(audioEx);
                 return;
             }
-            catch(TaskCanceledException e)
+            catch (TaskCanceledException e)
             {
                 MajDebug.LogWarning(e);
                 return;
             }
-            catch(OperationCanceledException canceledEx)
+            catch (OperationCanceledException canceledEx)
             {
                 MajDebug.LogWarning(canceledEx);
                 return;
             }
-            catch(Exception e)
+            catch (Exception e)
             {
                 await UniTask.SwitchToMainThread();
                 MajInstances.SceneSwitcher.SetLoadingText($"{"MAJTEXT_ERR_UNKNOWN".i18n()}\n{e.Message}", Color.red);
@@ -504,7 +595,7 @@ namespace MajdataPlay.Scenes.Game
                 throw;
             }
         }
-        void LedRingLoadingUpdate(float percent,float lastPercent)
+        private void LedRingLoadingUpdate(float percent, float lastPercent)
         {
             var progress = (int)(8 * percent);
             var lastProgress = (int)(8 * lastPercent);
@@ -512,29 +603,29 @@ namespace MajdataPlay.Scenes.Game
             {
                 return;
             }
-            LedRing.SetAllLight(Color.black);
+            CabinetLed.SetAllLight(Color.black);
             if (progress == 0)
             {
-                LedRing.SetSineFunc(0, Color.green, 1000);
+                CabinetLed.SetSineFunc(0, Color.green, 1000);
                 return;
             }
-            else if(progress == 8)
+            else if (progress == 8)
             {
-                LedRing.SetAllLight(Color.green);
+                CabinetLed.SetAllLight(Color.green);
                 return;
             }
             for (var i = 0; i < progress; i++)
             {
-                LedRing.SetButtonLight(Color.green, i);
+                CabinetLed.SetButtonLight(Color.green, i);
             }
-            LedRing.SetSineFunc(progress, Color.green, 1000);
+            CabinetLed.SetSineFunc(progress, Color.green, 1000);
         }
 
 
-        async UniTask LoadAudioTrack()
+        private async UniTask LoadAudioTrack()
         {
             var audioSample = await _songDetail.GetAudioTrackAsync();
-            if(audioSample is null || audioSample.IsEmpty)
+            if (audioSample is null || audioSample.IsEmpty)
             {
                 throw new InvalidAudioTrackException("Failed to decode audio track", string.Empty);
             }
@@ -543,9 +634,9 @@ namespace MajdataPlay.Scenes.Game
             _audioSample.Speed = PlaybackSpeed;
             _audioSample.IsLoop = false;
             _audioSample.CurrentSec = 0;
-            if(IsPracticeMode)
+            if (IsPracticeMode)
             {
-                if(_gameInfo.TimeRange is Range<double> timeRange)
+                if (_gameInfo.TimeRange is Range<double> timeRange)
                 {
                     var playbackSpeed = PlaybackSpeed;
                     var startAt = timeRange.Start;
@@ -553,7 +644,7 @@ namespace MajdataPlay.Scenes.Game
                     startAt = Math.Max(startAt - 3, 0) / playbackSpeed;
                     endAt = Math.Min(endAt, _audioSample.Length.TotalSeconds) / playbackSpeed;
 
-                    if(startAt >= endAt)
+                    if (startAt >= endAt)
                     {
                         //throw a exception
                     }
@@ -561,20 +652,23 @@ namespace MajdataPlay.Scenes.Game
                     _audioTrackStartAt = (float)startAt;
                 }
             }
-            AudioLength = (float)_audioSample.Length.TotalSeconds / MajInstances.Settings.Mod.PlaybackSpeed;
+            AudioLength = (float)_audioSample.Length.TotalSeconds / MajEnv.SystemSettings.Mod.PlaybackSpeed;
         }
         /// <summary>
         /// Parse the chart into memory
         /// </summary>
         /// <returns></returns>
         /// <exception cref="TaskCanceledException"></exception>
-        async UniTask ParseChart()
+        private async UniTask ParseChart()
         {
             void ChartMirror(ref string chartContent)
             {
-                var mirrorType = _setting.Game.Mirror;
+                var mirrorType = _userSettings.Game.Mirror;
                 if (mirrorType is MirrorOption.Off)
+                {
                     return;
+                }
+
                 chartContent = SimaiMirror.NoteMirrorHandle(chartContent, mirrorType);
             }
             MajInstances.SceneSwitcher.SetLoadingText($"{"MAJTEXT_DESERIALIZATION".i18n()}...");
@@ -665,7 +759,7 @@ namespace MajdataPlay.Scenes.Game
             }
             _chart = _chart.AddOffset(-_displayOffsetSec);
             await UniTask.SwitchToMainThread();
-            GameObject.Find("ChartAnalyzer").GetComponent<ChartAnalyzer>().AnalyzeAndDrawGraphAsync(_chart, AudioLength).Forget();
+            _chartVisualDisplayer.SetSimaiChart(_chart, _audioTimeOffsetSec, AudioLength);
             await UniTask.SwitchToThreadPool();
             var simaiCmd = _simaiFile.Commands.FirstOrDefault(x => x.Prefix == "clock_count");
             var countnum = 4;
@@ -680,41 +774,50 @@ namespace MajdataPlay.Scenes.Game
         /// Load the background picture and set brightness
         /// </summary>
         /// <returns></returns>
-        async UniTask InitBackground()
+        private async UniTask InitBackground()
         {
             await UniTask.Yield(PlayerLoopTiming.LastPostLateUpdate);
 
-            var dim = _setting.Game.BackgroundDim;
+            var dim = _userSettings.Game.BackgroundDim;
+
             if (dim < 1f)
             {
-                var videoPath = await _songDetail.GetVideoPathAsync();
-                if (!string.IsNullOrEmpty(videoPath))
+                var isNeed2DownloadVideo = _songDetail.IsOnline && !_songDetail.IsVideoLoaded;
+                var cover = await _songDetail.GetCoverAsync(false);
+                await UniTask.SwitchToMainThread();
+                if (_chartSetting.DisableVideoBG || (_userSettings.Game.SkipVideoDownload && isNeed2DownloadVideo))
                 {
-                    var cover = await _songDetail.GetCoverAsync(false);
-                    await UniTask.SwitchToMainThread();
-                    await _bgManager.SetMovieAsync(videoPath, cover);
+                    _bgManager.SetBackgroundPic(cover);
                 }
                 else
                 {
-                    var cover = await _songDetail.GetCoverAsync(false);
+                    var videoPath = await _songDetail.GetVideoPathAsync();
                     await UniTask.SwitchToMainThread();
-                    _bgManager.SetBackgroundPic(cover);
-                }        
+                    if (string.IsNullOrEmpty(videoPath))
+                    {
+                        _bgManager.SetBackgroundPic(cover);
+                    }
+                    else
+                    {
+                        await _bgManager.SetMovieAsync(videoPath, cover);
+                        await UniTask.SwitchToMainThread();
+                    }
+                }
             }
 
-            _bgManager.SetBackgroundDim(1.0f);
+            _bgManager.SetBrightness(0f);
         }
         /// <summary>
         /// Parse and load notes into NotePool
         /// </summary>
         /// <returns></returns>
-        async UniTask LoadNotes()
+        private async UniTask LoadNotes()
         {
             await UniTask.Yield(PlayerLoopTiming.LastPostLateUpdate);
 
-            var tapSpeed = Math.Abs(_setting.Game.TapSpeed);
+            var tapSpeed = Math.Abs(_userSettings.Game.TapSpeed);
 
-            if(_setting.Game.TapSpeed < 0)
+            if (_userSettings.Game.TapSpeed < 0)
             {
                 _noteLoader.NoteSpeed = -((float)(107.25 / (71.4184491 * Mathf.Pow(tapSpeed + 0.9975f, -0.985558604f))));
             }
@@ -722,7 +825,8 @@ namespace MajdataPlay.Scenes.Game
             {
                 _noteLoader.NoteSpeed = ((float)(107.25 / (71.4184491 * Mathf.Pow(tapSpeed + 0.9975f, -0.985558604f))));
             }
-            _noteLoader.TouchSpeed = _setting.Game.TouchSpeed;
+            _noteLoader.TouchSpeed = _userSettings.Game.TouchSpeed;
+            _noteLoader.SlidePathStyle = _userSettings.Display.SlidePathStyle;
             _noteLoader.ChartRotation = _chartRotation + (2 * (int)_screenRotationAngle);
 
             //var loaderTask = noteLoader.LoadNotes(Chart);
@@ -736,18 +840,18 @@ namespace MajdataPlay.Scenes.Game
                 lastPercent = percent;
                 await UniTask.Yield();
             }
-            if(loaderTask.Status.IsCanceled())
+            if (loaderTask.Status.IsCanceled())
             {
-                LedRing.SetAllLight(Color.white);
+                CabinetLed.SetAllLight(Color.white);
                 return;
             }
-            else if(loaderTask.Status.IsFaulted())
+            else if (loaderTask.Status.IsFaulted())
             {
                 var task = loaderTask.AsTask();
                 var e = task.Exception.InnerException;
 
                 MajInstances.SceneSwitcher.SetLoadingText($"{"MAJTEXT_ERR_LOAD_CHART_FAILED".i18n()}\n{e.Message}%", Color.red);
-                LedRing.SetAllLight(Color.red);
+                CabinetLed.SetAllLight(Color.red);
                 MajDebug.LogException(task.Exception);
                 StopAllCoroutines();
                 throw e;
@@ -757,13 +861,13 @@ namespace MajdataPlay.Scenes.Game
             _noteEffectPool.Init();
             await UniTask.Yield();
         }
-        async UniTask PrepareToPlay()
+        private async UniTask PrepareToPlay()
         {
             if (_audioSample is null)
             {
                 return;
             }
-            LedRing.SetAllLight(Color.white);
+            CabinetLed.SetAllLight(Color.white);
             await UniTask.SwitchToMainThread();
             switch (ModInfo.NoteMask)
             {
@@ -783,18 +887,16 @@ namespace MajdataPlay.Scenes.Game
             const float BG_FADE_IN_LENGTH_SEC = 0.25f;
             Time.timeScale = 1f;
             var firstClockTiming = _noteAudioManager.FirstClockTiming;
-            float extraTime = 5f;
+            var leadInTime = _userSettings.Game.LeadInTime.Clamp(1, 5);
+            float extraTime = leadInTime;
             if (firstClockTiming < 0f)
             {
-                extraTime = (-(float)firstClockTiming) + 5f;
+                extraTime = (-(float)firstClockTiming) + leadInTime;
             }
             if (FirstNoteAppearTiming < 0f)
             {
-                extraTime = MathF.Min(extraTime, (-FirstNoteAppearTiming + 5f));
+                extraTime = MathF.Min(extraTime, (-FirstNoteAppearTiming + leadInTime));
             }
-            _audioStartTime = (float)(_timer.ElapsedSecondsAsFloat + _audioSample.CurrentSec) + extraTime;
-            _thisFrameSec = -extraTime;
-            _thisFixedUpdateSec = _thisFrameSec;
 
             await _noteManager.InitAsync();
             while (!_generateAnswerSFXTask.IsCompleted)
@@ -813,7 +915,7 @@ namespace MajdataPlay.Scenes.Game
             {
                 await UniTask.Yield(token);
             }
-            if(isAwaited)
+            if (isAwaited)
             {
                 GC.Collect();
                 await UniTask.Delay(2000, true, cancellationToken: token);
@@ -821,12 +923,12 @@ namespace MajdataPlay.Scenes.Game
             token.ThrowIfCancellationRequested();
             await UniTask.Yield(PlayerLoopTiming.LastPostLateUpdate);
 
-            var wait4Recorder = RecordHelper.StartRecordAsync($"{_songDetail.Title}_{_songDetail.Designers[(int)_gameInfo.CurrentLevel]}");
+            var wait4Recorder = Recording.Recorder.StartRecordAsync($"{_songDetail.Title}_{_songDetail.Designers[(int)_gameInfo.CurrentLevel]}");
             while (!wait4Recorder.IsCompleted)
             {
                 token.ThrowIfCancellationRequested();
                 await UniTask.SwitchToMainThread();
-                _sceneSwitcher.SetLoadingText($"{"Waiting for recorder".i18n()}...");
+                _sceneSwitcher.SetLoadingText($"{"MAJTEXT_WAITING_FOR_RECORDER".i18n()}...");
                 await UniTask.Yield();
             }
             token.ThrowIfCancellationRequested();
@@ -835,19 +937,37 @@ namespace MajdataPlay.Scenes.Game
                 throw wait4Recorder.Exception.GetBaseException();
             }
             await UniTask.SwitchToMainThread();
-            _sceneSwitcher.SetLoadingText($"{"Loading".i18n()}...");
+            _sceneSwitcher.SetLoadingText("Loading...");
             MajInstances.GameManager.DisableGC();
 
             await UniTask.Delay(1000, cancellationToken: token);
-            MajInstances.SceneSwitcher.FadeOut();
-            await UniTask.Delay(100, cancellationToken: token); //wait the animation
+            if (_isManualStartGame)
+            {
+                _sceneSwitcher.SetLoadingText($"{"MAJTEXT_GAME_PRESS_4TH_BUTTON_TO_CONTINUE".i18n()}...");
+                do
+                {
+                    // Read the shared scene input after GameUpdater has sampled this frame.
+                    await UniTask.Yield(PlayerLoopTiming.LastUpdate, token);
+                }
+                while (!(InputManager.IsButtonPressedInThisFrame(ButtonZone.A4) ||
+                         InputManager.IsSensorPressedInThisFrame(SensorArea.A4)));
+                _sceneSwitcher.SetLoadingText("Loading...");
+                await UniTask.Yield(token);
+            }
+            _sceneSwitcher.SetLoadingText(string.Empty);
+
+            await MajInstances.SceneSwitcher.FadeOutAsync(); //wait the animation
+
+            _audioStartTime = (float)(_timer.ElapsedSecondsAsFloat + _audioSample.CurrentSec) + extraTime;
+            _thisFrameSec = -extraTime;
+            _thisFixedUpdateSec = _thisFrameSec;
 
             State = GamePlayStatus.Running;
             IsStart = true;
             var startSec = _audioTrackStartAt * PlaybackSpeed;
             if (!IsPracticeMode)
             {
-                var userSettingBGDim = _setting.Game.BackgroundDim;
+                var userSettingBGDim = _userSettings.Game.BackgroundDim;
                 var dimDiff = 1 - userSettingBGDim;
                 var bgFadeStartTiming = MathF.Min(firstClockTiming, -BG_FADE_IN_LENGTH_SEC);
                 while (_timer.ElapsedSecondsAsFloat - _audioStartTime < 0)
@@ -856,8 +976,8 @@ namespace MajdataPlay.Scenes.Game
                     if (timeDiff > bgFadeStartTiming)
                     {
                         var fadeProgress = ((timeDiff - bgFadeStartTiming) / BG_FADE_IN_LENGTH_SEC).Clamp(0f, 1f);
-                        var dim = 1 - (fadeProgress * dimDiff);
-                        _bgManager.SetBackgroundDim(dim);
+                        var dim = fadeProgress * dimDiff;
+                        _bgManager.SetBrightness(dim);
                     }
                     await UniTask.Yield(PlayerLoopTiming.LastPostLateUpdate);
                     token.ThrowIfCancellationRequested();
@@ -866,19 +986,19 @@ namespace MajdataPlay.Scenes.Game
             UniTask.Void(async () =>
             {
                 MajDebug.LogDebug($"Waiting for the video to be ready to play\nVideo seek: {_videoOffsetSec}s\nVideo wait time: {_videoWaitTimeSec}s");
-                var videoStartTime = startSec + _videoWaitTimeSec * PlaybackSpeed;
+                var videoStartTime = startSec + (_videoWaitTimeSec * PlaybackSpeed);
                 while (_timer.ElapsedSecondsAsFloat < _videoWaitTimeSec)
                 {
                     token.ThrowIfCancellationRequested();
                     await UniTask.Yield(PlayerLoopTiming.LastPostLateUpdate);
                 }
                 token.ThrowIfCancellationRequested();
-                var videoStartAt = startSec + _videoOffsetSec * PlaybackSpeed;
+                var videoStartAt = startSec + (_videoOffsetSec * PlaybackSpeed);
                 MajDebug.LogDebug($"Start playing video at {videoStartAt}s");
                 _bgManager.PlayVideo(videoStartAt, PlaybackSpeed);
                 MajDebug.LogDebug("Video wait loop exited");
             });
-            _bgManager.SetBackgroundDim(_setting.Game.BackgroundDim);
+            _bgManager.SetBrightness(1 - _userSettings.Game.BackgroundDim);
             _audioSample.Play();
             _audioSample.Volume = 0;
             _audioSample.CurrentSec = startSec;
@@ -886,23 +1006,23 @@ namespace MajdataPlay.Scenes.Game
             _audioStartTime = _timer.ElapsedSecondsAsFloat - _audioTrackStartAt;
             MajDebug.LogInfo($"Chart playback speed: {PlaybackSpeed}x");
             _bgInfoHeaderAnim.SetTrigger("fadeIn");
-            if(IsPracticeMode)
+            if (IsPracticeMode)
             {
                 var elapsedSeconds = 0f;
                 var originVol = _trackVolume;
-                
+
                 BgHeaderFadeOut();
                 try
                 {
                     while (elapsedSeconds < 3)
                     {
                         token.ThrowIfCancellationRequested();
-                        _audioSample.Volume = (elapsedSeconds / 3f) * originVol;
+                        _audioSample.Volume = elapsedSeconds / 3f * originVol;
                         await UniTask.Yield();
                         elapsedSeconds += MajTimeline.DeltaTime;
                     }
                 }
-                catch(Exception e)
+                catch (Exception e)
                 {
                     MajDebug.LogException(e);
                 }
@@ -916,13 +1036,13 @@ namespace MajdataPlay.Scenes.Game
                 BgHeaderFadeOut();
             }
         }
-        void BgHeaderFadeOut()
+        private void BgHeaderFadeOut()
         {
             if (_gameInfo.IsDanMode)
             {
                 return;
             }
-            switch (MajInstances.Settings.Game.BGInfo)
+            switch (MajEnv.UserSettings.Display.BGInfo)
             {
                 case BGInfoOption.Achievement_101:
                 case BGInfoOption.Achievement_100:
@@ -947,7 +1067,7 @@ namespace MajdataPlay.Scenes.Game
             }
         }
 
-#endregion
+        #endregion
 
         #region GameUpdate
         internal void OnPreUpdate()
@@ -963,8 +1083,7 @@ namespace MajdataPlay.Scenes.Game
             using (UnityProfiler.Create("GamePlayManager.OnUpdate"))
             {
                 NoteManagerUpdate();
-                GameControlUpdate();
-                FnKeyStateUpdate();
+                _fnController.OnUpdate();
             }
         }
         internal void OnLateUpdate()
@@ -979,23 +1098,19 @@ namespace MajdataPlay.Scenes.Game
                         _noteAudioManager.OnLateUpdate();
                         _noteManager.OnLateUpdate();
                         _objectCounter.OnLateUpdate();
-                        AutoTrackSkipUpdate();
-                        AutoQuickRetryUpdate();
+                        EnforceGameFailureLateUpdate();
                         break;
                 }
+                GameControlLateUpdate();
                 _noteEffectPool.OnLateUpdate();
                 _recorderStateDisplayer.OnLateUpdate();
-                if (_bgManager.CurrentSec > _bgManager.MediaLength.TotalSeconds)
+                if (_bgManager.IsVideoEnded)
                 {
-                    _bgManager.SetBackgroundDim(1.0f);
-                }
-                else
-                {
-                    _bgManager.OnLateUpdate();
+                    _bgManager.SetBrightness(0f);
                 }
             }
         }
-        void GameControlUpdate()
+        private void GameControlLateUpdate()
         {
             using (UnityProfiler.Create("GamePlayManager.GameControlUpdate"))
             {
@@ -1070,9 +1185,9 @@ namespace MajdataPlay.Scenes.Game
                 }
             }
         }
-        void ComponentPreUpdate()
+        private void ComponentPreUpdate()
         {
-            switch(State)
+            switch (State)
             {
                 case GamePlayStatus.WaitForEnd:
                 case GamePlayStatus.Blocking:
@@ -1080,13 +1195,14 @@ namespace MajdataPlay.Scenes.Game
                     _noteAudioManager.OnPreUpdate();
                     _noteManager.OnPreUpdate();
                     _notePoolManager.OnPreUpdate();
+                    _objectCounter.OnPreUpdate();
                     break;
             }
             Profiler.BeginSample("TimeDisplayer.OnPreUpdate");
             _timeDisplayer.OnPreUpdate();
             Profiler.EndSample();
         }
-        void NoteManagerUpdate()
+        private void NoteManagerUpdate()
         {
             switch (State)
             {
@@ -1097,260 +1213,102 @@ namespace MajdataPlay.Scenes.Game
                     break;
             }
         }
-        void FnKeyStateUpdate()
+        private void EnforceGameFailureLateUpdate()
         {
-            using (UnityProfiler.Create("GamePlayManager.FnKeyStateUpdate"))
+            if (_enforceGameFailureCondition == EnforceGameFailureCondition.Disabled)
             {
-                if (State != GamePlayStatus.Ended)
-                {
-                    var _inner_2367 = InputManager.CheckSensorStatus(SensorArea.A2, SwitchStatus.On) &&
-                                        InputManager.CheckSensorStatus(SensorArea.A3, SwitchStatus.On) &&
-                                        InputManager.CheckSensorStatus(SensorArea.A6, SwitchStatus.On) &&
-                                        InputManager.CheckSensorStatus(SensorArea.A7, SwitchStatus.On);
-                    var _inner_3456 = InputManager.CheckSensorStatus(SensorArea.A3, SwitchStatus.On) &&
-                                        InputManager.CheckSensorStatus(SensorArea.A4, SwitchStatus.On) &&
-                                        InputManager.CheckSensorStatus(SensorArea.A5, SwitchStatus.On) &&
-                                        InputManager.CheckSensorStatus(SensorArea.A6, SwitchStatus.On);
+                return;
+            }
+            else if (State != GamePlayStatus.Running && State != GamePlayStatus.Blocking)
+            {
+                return;
+            }
+            else if (_gameInfo.IsDanMode || IsPracticeMode)
+            {
+                return;
+            }
 
-                    var _outter_2367 = InputManager.CheckButtonStatus(ButtonZone.A2, SwitchStatus.On) &&
-                                        InputManager.CheckButtonStatus(ButtonZone.A3, SwitchStatus.On) &&
-                                        InputManager.CheckButtonStatus(ButtonZone.A6, SwitchStatus.On) &&
-                                        InputManager.CheckButtonStatus(ButtonZone.A7, SwitchStatus.On);
-                    var _outter_3456 = InputManager.CheckButtonStatus(ButtonZone.A3, SwitchStatus.On) &&
-                                        InputManager.CheckButtonStatus(ButtonZone.A4, SwitchStatus.On) &&
-                                        InputManager.CheckButtonStatus(ButtonZone.A5, SwitchStatus.On) &&
-                                        InputManager.CheckButtonStatus(ButtonZone.A6, SwitchStatus.On);
-#if UNITY_ANDROID || UNITY_IOS
-                    var _2367 = (_inner_2367 || _outter_2367) && _isTrackSkipAvailable;
-                    var _3456 = (_inner_3456 || _outter_3456) && _isFastRetryAvailable;
-#else
-                    var _2367 = _outter_2367 && _isTrackSkipAvailable;
-                    var _3456 = _outter_3456 && _isFastRetryAvailable;
-#endif
-                    var _p1Skip = InputManager.CheckButtonStatus(ButtonZone.P1, SwitchStatus.On);
-                    if (_p1Skip)
+            var accStats = _objectCounter.AccurateStats;
+            double maxAchievement;
+            if (IsClassicMode)
+            {
+                maxAchievement = accStats.ClassicAchievement_B;
+            }
+            else
+            {
+                maxAchievement = accStats.Achievement_A;
+            }
+            ref readonly var judgeStats = ref _objectCounter.JudgeStats;
+            switch (_enforceGameFailureCondition)
+            {
+                case EnforceGameFailureCondition.TrackSkip_S:
+                case EnforceGameFailureCondition.Retry_S:
+                    if (maxAchievement < 97f)
                     {
-                        _p1SkipTime += MajTimeline.DeltaTime;
+                        goto ZAKO_ZAKO;
                     }
-                    else if (_2367)
+                    break;
+                case EnforceGameFailureCondition.TrackSkip_SS:
+                case EnforceGameFailureCondition.Retry_SS:
+                    if (maxAchievement < 99f)
                     {
-                        _2367PressTime += MajTimeline.DeltaTime;
-                        _3456PressTime = 0;
+                        goto ZAKO_ZAKO;
                     }
-                    else if (_3456)
+                    break;
+                case EnforceGameFailureCondition.TrackSkip_SSS:
+                case EnforceGameFailureCondition.Retry_SSS:
+                    if (maxAchievement < 100f)
                     {
-                        _3456PressTime += MajTimeline.DeltaTime;
-                        _2367PressTime = 0;
+                        goto ZAKO_ZAKO;
+                    }
+                    break;
+                case EnforceGameFailureCondition.TrackSkip_SSSPlus:
+                case EnforceGameFailureCondition.Retry_SSSPlus:
+                    if (maxAchievement < 100.5f)
+                    {
+                        goto ZAKO_ZAKO;
+                    }
+                    break;
+                case EnforceGameFailureCondition.TrackSkip_Best:
+                case EnforceGameFailureCondition.Retry_Best:
+                    if (maxAchievement < (IsClassicMode ? _historyAccurate.Classic : _historyAccurate.DX))
+                    {
+                        goto ZAKO_ZAKO;
+                    }
+                    break;
+                case EnforceGameFailureCondition.TrackSkip_FC:
+                case EnforceGameFailureCondition.Retry_FC:
+                    if (judgeStats.TotalMissCount != 0)
+                    {
+                        goto ZAKO_ZAKO;
+                    }
+                    break;
+                case EnforceGameFailureCondition.TrackSkip_AP:
+                case EnforceGameFailureCondition.Retry_AP:
+                    if (judgeStats.TotalGreatCount != 0 ||
+                        judgeStats.TotalGoodCount != 0 ||
+                        judgeStats.TotalMissCount != 0)
+                    {
+                        goto ZAKO_ZAKO;
+                    }
+                    break;
+                case EnforceGameFailureCondition.Disabled:
+                    break;
+                default:
+                    throw new ArgumentOutOfRangeException();
+                ZAKO_ZAKO:
+                    if (_isEnforceFastRetry)
+                    {
+                        EnforceFastRetry().Forget();
                     }
                     else
                     {
-                        _3456PressTime = 0;
-                        _2367PressTime = 0;
-                        _p1SkipTime = 0;
-                    }
-
-#if UNITY_ANDROID || UNITY_IOS
-                    var p1timeout = 0.5f;
-#else
-                var p1timeout = 0f;
-#endif
-                    if (_p1SkipTime > p1timeout)
-                    {
-                        if (IsPracticeMode)
-                        {
-                            var info = new GameInfo(GameMode.Practice, _gameInfo.Charts, _gameInfo.Levels, 114514);
-                            info.TimeRange = _gameInfo.TimeRange;
-                            Majdata<GameInfo>.Instance = info;
-                            ReturnTo("Practice").Forget();
-                        }
-                        else
-                        {
-                            TrackSkipTo(delayMiliseconds: 5000).Forget();
-                        }
-                    }
-                    else if (_2367PressTime >= 0.5f && _isTrackSkipAvailable)
-                    {
-                        if (IsPracticeMode)
-                        {
-                            var info = new GameInfo(GameMode.Practice, _gameInfo.Charts, _gameInfo.Levels, 114514);
-                            info.TimeRange = _gameInfo.TimeRange;
-                            Majdata<GameInfo>.Instance = info;
-                            TrackSkipTo("Practice", 2000).Forget();
-                        }
-                        else
-                        {
-                            TrackSkipTo(delayMiliseconds: 5000).Forget();
-                        }
-                    }
-                    else if (_3456PressTime >= 0.5f && _isFastRetryAvailable)
-                    {
-                        FastRetry().Forget();
-                    }
-                }
-                else
-                {
-                    _3456PressTime = 0;
-                    _2367PressTime = 0;
-                    _p1SkipTime = 0;
-                    return;
-                }
-            } 
-        }
-        void AutoTrackSkipUpdate()
-        {
-            if (State != GamePlayStatus.Running && State != GamePlayStatus.Blocking)
-            {
-                return;
-            }
-            if (_autoTrackSkipOption == AutoTrackSkipOption.Disabled)
-            {
-                return;
-            }
-            if (MajEnv.Mode != RunningMode.Play || _gameInfo.IsDanMode || IsPracticeMode || IsAutoplay)
-            {
-                return;
-            }
-
-            var maxAchievement = _objectCounter.CalculateFinalResult();
-            switch (_autoTrackSkipOption)
-            {
-                case AutoTrackSkipOption.S:
-                    if (maxAchievement < 97f)
-                    {
-                        TrackSkipTo(delayMiliseconds: 5000).Forget();
+                        EnforceTrackSkipTo().Forget();
                     }
                     break;
-                case AutoTrackSkipOption.SS:
-                    if (maxAchievement < 99f)
-                    {
-                        TrackSkipTo(delayMiliseconds: 5000).Forget();
-                    }
-                    break;
-                case AutoTrackSkipOption.SSS:
-                    if (maxAchievement < 100f)
-                    {
-                        TrackSkipTo(delayMiliseconds: 5000).Forget();
-                    }
-                    break;
-                case AutoTrackSkipOption.SSSPlus:
-                    if (maxAchievement < 100.5f)
-                    {
-                        TrackSkipTo(delayMiliseconds: 5000).Forget();
-                    }
-                    break;
-                case AutoTrackSkipOption.Best:
-                    if ((HistoryScore?.PlayCount ?? 0) == 0)
-                    {
-                        return;
-                    }
-                    if (maxAchievement < HistoryScore!.Acc.DX)
-                    {
-                        TrackSkipTo(delayMiliseconds: 5000).Forget();
-                    }
-                    break;
-                case AutoTrackSkipOption.FC:
-                    if (HasLostFCRequirement())
-                    {
-                        TrackSkipTo(delayMiliseconds: 5000).Forget();
-                    }
-                    break;
-                case AutoTrackSkipOption.AP:
-                    if (HasLostAPRequirement())
-                    {
-                        TrackSkipTo(delayMiliseconds: 5000).Forget();
-                    }
-                    break;
-                case AutoTrackSkipOption.Disabled:
-                    break;
-                default:
-                    throw new ArgumentOutOfRangeException();
             }
         }
-        void AutoQuickRetryUpdate()
-        {
-            if (State != GamePlayStatus.Running && State != GamePlayStatus.Blocking)
-            {
-                return;
-            }
-            if (_autoQuickRetryOption == AutoQuickRetryOption.Disabled)
-            {
-                return;
-            }
-            if (_autoTrackSkipOption != AutoTrackSkipOption.Disabled)
-            {
-                return;
-            }
-            if (MajEnv.Mode != RunningMode.Play || _gameInfo.IsDanMode || IsPracticeMode || IsAutoplay)
-            {
-                return;
-            }
-
-            var maxAchievement = _objectCounter.CalculateFinalResult();
-            switch (_autoQuickRetryOption)
-            {
-                case AutoQuickRetryOption.S:
-                    if (maxAchievement < 97f)
-                    {
-                        FastRetry().Forget();
-                    }
-                    break;
-                case AutoQuickRetryOption.SS:
-                    if (maxAchievement < 99f)
-                    {
-                        FastRetry().Forget();
-                    }
-                    break;
-                case AutoQuickRetryOption.SSS:
-                    if (maxAchievement < 100f)
-                    {
-                        FastRetry().Forget();
-                    }
-                    break;
-                case AutoQuickRetryOption.SSSPlus:
-                    if (maxAchievement < 100.5f)
-                    {
-                        FastRetry().Forget();
-                    }
-                    break;
-                case AutoQuickRetryOption.Best:
-                    if ((HistoryScore?.PlayCount ?? 0) == 0)
-                    {
-                        return;
-                    }
-                    if (maxAchievement < HistoryScore!.Acc.DX)
-                    {
-                        FastRetry().Forget();
-                    }
-                    break;
-                case AutoQuickRetryOption.FC:
-                    if (HasLostFCRequirement())
-                    {
-                        FastRetry().Forget();
-                    }
-                    break;
-                case AutoQuickRetryOption.AP:
-                    if (HasLostAPRequirement())
-                    {
-                        FastRetry().Forget();
-                    }
-                    break;
-                case AutoQuickRetryOption.Disabled:
-                    break;
-                default:
-                    throw new ArgumentOutOfRangeException();
-            }
-        }
-        bool HasLostFCRequirement()
-        {
-            var judgeInfo = _objectCounter.GetCurrentTotalJudgeInfo();
-            return judgeInfo.Miss != 0;
-        }
-        bool HasLostAPRequirement()
-        {
-            var judgeInfo = _objectCounter.GetCurrentTotalJudgeInfo();
-            return judgeInfo.Great != 0 || judgeInfo.Good != 0 || judgeInfo.Miss != 0;
-        }
-        void AudioTimeUpdate()
+        private void AudioTimeUpdate()
         {
             using (UnityProfiler.Create("GamePlayManager.AudioTimeUpdate"))
             {
@@ -1374,22 +1332,23 @@ namespace MajdataPlay.Scenes.Game
                             var elapsedSeconds = _timer.ElapsedSecondsAsFloat;
                             var playbackSpeed = PlaybackSpeed;
                             var timeOffset = elapsedSeconds - _audioStartTime + _devicePlaybackOffset;
-                            var realTimeDifference = (float)_audioSample.CurrentSec - timeOffset * playbackSpeed;
-                            var realTimeDifferenceb = (float)_bgManager.CurrentSec - timeOffset * playbackSpeed;
+                            var realTimeDifference = (float)_audioSample.CurrentSec - (timeOffset * playbackSpeed);
+                            var realTimeDifferenceb = (float)_bgManager.CurrentSec - (timeOffset * playbackSpeed);
 
                             _thisFrameSec = timeOffset;
-#if UNITY_ANDROID || UNITY_IOS
-                            var diff = _thisFrameSec - _audioTrackStartAt;
-                            if (diff <= 2f && diff >= 0f)
+                            if (MajEnv.SystemSettings.Audio.Backend == SoundBackendOption.BassSimple)
                             {
-                                _devicePlaybackOffset += (realTimeDifference - _devicePlaybackOffset)*0.8f;
+                                var diff = _thisFrameSec - _audioTrackStartAt;
+                                if (diff <= 2f && diff >= 0f)
+                                {
+                                    _devicePlaybackOffset += realTimeDifference * 0.8f;
+                                }
                             }
-#endif
 
                             var sb = ZString.CreateStringBuilder(true);
                             try
                             {
-                                ERROR_TEXT_FORMAT.FormatTo(ref sb, realTimeDifference, realTimeDifferenceb);
+                                ERROR_TEXT_FORMAT.FormatTo(ref sb, realTimeDifference, realTimeDifferenceb, _devicePlaybackOffset);
                                 var a = sb.AsArraySegment();
                                 _errText.SetCharArray(a.Array, a.Offset, a.Count);
                             }
@@ -1403,14 +1362,14 @@ namespace MajdataPlay.Scenes.Game
             }
         }
 
-#endregion
+        #endregion
 
         #region GameEnding
 
         private GameResult CalculateScore(bool playEffect = true)
         {
-            var acc = _objectCounter.CalculateFinalResult();
-            print("GameResult: " + acc);
+            var accStats = _objectCounter.AccurateStats;
+            print("GameResult: " + accStats.Achievement_A);
             var result = _objectCounter.GetPlayRecord(_songDetail, _listConfig.SelectedDiff);
             _gameInfo.RecordResult(result);
 
@@ -1422,53 +1381,55 @@ namespace MajdataPlay.Scenes.Game
 
             return result;
         }
-        void PlayComboEffect(GameResult result)
+        private void PlayComboEffect(GameResult result)
         {
-            switch(result.ComboState)
+            switch (result.ComboState)
             {
                 case ComboState.APPlus:
-                    AllPerfectAnimation.SetActive(true);
+                    _allPerfectAnimation.SetActive(true);
                     MajInstances.AudioManager.PlaySFX("all_perfect_plus.wav");
                     MajInstances.AudioManager.PlaySFX("bgm_explosion.mp3");
-                    LedRing.SetAllLightSineFunc(Color.yellow, 2000);
+                    CabinetLed.SetAllLightSineFunc(Color.yellow, 2000);
                     break;
                 case ComboState.AP:
-                    AllPerfectAnimation.SetActive(true);
+                    _allPerfectAnimation.SetActive(true);
                     MajInstances.AudioManager.PlaySFX("all_perfect.wav");
                     MajInstances.AudioManager.PlaySFX("bgm_explosion.mp3");
-                    LedRing.SetAllLightSineFunc(Color.red, 2000);
+                    CabinetLed.SetAllLightSineFunc(Color.red, 2000);
                     break;
                 case ComboState.FCPlus:
-                    FullComboAnimation.SetActive(true);
+                    _fullComboAnimation.SetActive(true);
                     MajInstances.AudioManager.PlaySFX("full_combo_plus.wav");
                     MajInstances.AudioManager.PlaySFX("bgm_explosion.mp3");
-                    LedRing.SetAllLightSineFunc(Color.green, 2000);
+                    CabinetLed.SetAllLightSineFunc(Color.green, 2000);
                     break;
                 case ComboState.FC:
-                    FullComboAnimation.SetActive(true);
+                    _fullComboAnimation.SetActive(true);
                     MajInstances.AudioManager.PlaySFX("full_combo.wav");
                     MajInstances.AudioManager.PlaySFX("bgm_explosion.mp3");
-                    LedRing.SetAllLightSineFunc(Color.green, 2000);
+                    CabinetLed.SetAllLightSineFunc(Color.green, 2000);
                     break;
             }
         }
-        void PlayTrackSkipEffect()
+        private void PlayGameOverEffect()
         {
-            if (TrackSkipAnimation is null)
+            if (_gameOverAnimation is null)
             {
                 return;
             }
 
-            TrackSkipAnimation.SetActive(true);
+            _gameOverAnimation.SetActive(true);
             MajInstances.AudioManager.PlaySFX("GameOver.wav");
         }
-        async UniTaskVoid NextRound4Practice(int delayMiliseconds = 100)
+        private async UniTaskVoid NextRound4Practice(int delayMiliseconds = 100)
         {
             if (State == GamePlayStatus.Ended)
+            {
                 return;
+            }
 
             State = GamePlayStatus.Ended;
-            
+
             await UniTask.Delay(delayMiliseconds);
             ClearAllResources();
             var remainingSeconds = 1f;
@@ -1476,7 +1437,7 @@ namespace MajdataPlay.Scenes.Game
             _audioSample!.Volume = 0;
             while (remainingSeconds > 0)
             {
-                _audioSample.Volume = (remainingSeconds / 1f) * originVol;
+                _audioSample.Volume = remainingSeconds / 1f * originVol;
 
                 await UniTask.Yield();
                 remainingSeconds -= Time.deltaTime;
@@ -1485,24 +1446,28 @@ namespace MajdataPlay.Scenes.Game
             _audioSample.Pause();
 
             await UniTask.Delay(200);
-            if(_gameInfo.NextRound())
+            if (_gameInfo.NextRound())
             {
-                MajInstances.SceneSwitcher.SwitchScene("Game",false);
+                MajInstances.SceneSwitcher.SwitchScene("Game", false);
             }
             else
             {
                 MajInstances.SceneSwitcher.SwitchScene("Result");
             }
         }
-        async UniTaskVoid FastRetry()
+        /// <summary>Stops the current run and reloads the gameplay scene after recording has finished.</summary>
+        /// <returns>The asynchronous gameplay restart.</returns>
+        internal async UniTaskVoid FastRetry()
         {
             if (State == GamePlayStatus.Ended)
+            {
                 return;
+            }
             State = GamePlayStatus.Ended;
-            var wait4Recorder = RecordHelper.StopRecordAsync();
+            var wait4Recorder = Recording.Recorder.StopRecordAsync();
             while (!wait4Recorder.IsCompleted)
             {
-                _sceneSwitcher.SetLoadingText($"{"Waiting for recorder".i18n()}...");
+                _sceneSwitcher.SetLoadingText($"{"MAJTEXT_WAITING_FOR_RECORDER".i18n()}...");
                 await UniTask.Yield();
             }
             MajInstances.SceneSwitcher.FadeIn();
@@ -1514,46 +1479,129 @@ namespace MajdataPlay.Scenes.Game
         public void GameOver()
         {
             if (State == GamePlayStatus.Ended)
+            {
                 return;
+            }
 
-            CalculateScore(playEffect:false);
+            CalculateScore(playEffect: false);
             _cts.Cancel();
             _audioSample?.Stop();
-            PlayTrackSkipEffect();
+            PlayGameOverEffect();
             EndGame(5000, targetScene: "TotalResult").Forget();
         }
 
-        async UniTaskVoid ReturnTo(string sceneName = "List")
+        /// <summary>Skips the current track or returns to the current practice selection.</summary>
+        /// <param name="quickReturn">Whether practice mode uses the shorter return transition.</param>
+        /// <returns>The asynchronous transition to the song list or practice selection.</returns>
+        internal UniTaskVoid SkipTrack(bool quickReturn = false)
+        {
+            if (State == GamePlayStatus.Ended)
+            {
+                return default;
+            }
+            if (!IsPracticeMode)
+            {
+                return TrackSkipTo();
+            }
+
+            var info = new GameInfo(GameMode.Practice, _gameInfo.Charts, _gameInfo.Levels, 114514)
+            {
+                TimeRange = _gameInfo.TimeRange,
+            };
+            Majdata<GameInfo>.Instance = info;
+            if (quickReturn)
+            {
+                return ReturnTo("Practice");
+            }
+            return TrackSkipTo("Practice", 2000);
+        }
+
+        /// <summary>Opens practice selection around the current playback time and stops the current run.</summary>
+        internal void FastPractice()
+        {
+            if (State == GamePlayStatus.Ended)
+            {
+                return;
+            }
+
+            var startTime = Math.Max(ThisFrameSec - 5f, 0f);
+            var endTime = Math.Min(ThisFrameSec + 10f, (float)_audioSample!.Length.TotalSeconds);
+            var info = new GameInfo(GameMode.Practice, _gameInfo.Charts, _gameInfo.Levels, 114514)
+            {
+                TimeRange = new Range<double>(startTime, endTime),
+            };
+            Majdata<GameInfo>.Instance = info;
+
+            State = GamePlayStatus.Ended;
+            _cts.Cancel();
+            _audioSample?.Stop();
+            ExitToScene("Practice", 0).Forget();
+        }
+
+        private async UniTaskVoid ReturnTo(string sceneName = "List")
         {
             State = GamePlayStatus.Ended;
             _audioSample?.Stop();
             await ExitToScene(sceneName, 500, false);
         }
-        async UniTaskVoid TrackSkipTo(string sceneName = "List", int delayMiliseconds = 5000)
+        private async UniTaskVoid TrackSkipTo(string sceneName = "List", int delayMiliseconds = 0)
         {
             if (State == GamePlayStatus.Ended)
+            {
                 return;
+            }
 
             State = GamePlayStatus.Ended;
             _cts.Cancel();
             _audioSample?.Stop();
-            PlayTrackSkipEffect();
-            await ExitToScene(sceneName, delayMiliseconds, true);
+            await ExitToScene(sceneName, delayMiliseconds);
         }
-        public async UniTaskVoid EndGame(int delayMiliseconds = 100,string targetScene = "Result")
+        private async UniTaskVoid EnforceTrackSkipTo(string sceneName = "List")
         {
             if (State == GamePlayStatus.Ended)
+            {
                 return;
+            }
+
+            State = GamePlayStatus.Ended;
+            _cts.Cancel();
+            _audioSample?.Stop();
+            PlayGameOverEffect();
+            await ExitToScene(sceneName, 5000, true);
+        }
+        private async UniTaskVoid EnforceFastRetry()
+        {
+            if (State == GamePlayStatus.Ended)
+            {
+                return;
+            }
+
+            State = GamePlayStatus.Ended;
+            _cts.Cancel();
+            _audioSample?.Stop();
+            PlayGameOverEffect();
+            await UniTask.Delay(5000);
+            MajInstances.SceneSwitcher.FadeIn();
+            await UniTask.Delay(400);
+            ClearAllResources();
+            MajInstances.SceneSwitcher.SwitchScene("Game", false);
+        }
+        public async UniTaskVoid EndGame(int delayMiliseconds = 100, string targetScene = "Result")
+        {
+            if (State == GamePlayStatus.Ended)
+            {
+                return;
+            }
             State = GamePlayStatus.Ended;
 
             await UniTask.Delay(delayMiliseconds);
             await MajInstances.SceneSwitcher.FadeInAsync();
             ClearAllResources();
             await UniTask.DelayFrame(5);
-            
+
             MajInstances.SceneSwitcher.SwitchScene(targetScene);
         }
-        async UniTask ExitToScene(string sceneName, int delayMiliseconds = 0, bool delayBeforeFade = false)
+        private async UniTask ExitToScene(string sceneName, int delayMiliseconds = 0, bool delayBeforeFade = false)
         {
             var sceneSwitcher = MajInstances.SceneSwitcher;
             if (delayBeforeFade && delayMiliseconds > 0)
@@ -1568,10 +1616,10 @@ namespace MajdataPlay.Scenes.Game
             ClearAllResources();
             await UniTask.Yield(PlayerLoopTiming.LastPostLateUpdate);
 
-            var wait4Recorder = RecordHelper.StopRecordAsync();
+            var wait4Recorder = Recording.Recorder.StopRecordAsync();
             while (!wait4Recorder.IsCompleted)
             {
-                _sceneSwitcher.SetLoadingText($"{"Waiting for recorder".i18n()}...");
+                _sceneSwitcher.SetLoadingText($"{"MAJTEXT_WAITING_FOR_RECORDER".i18n()}...");
                 await UniTask.Yield();
             }
             _sceneSwitcher.SetLoadingText(string.Empty);
@@ -1585,7 +1633,7 @@ namespace MajdataPlay.Scenes.Game
         #endregion
 
         #region Clean Up
-        void DisposeAudioTrack()
+        private void DisposeAudioTrack()
         {
             if (_audioSample is not null)
             {
@@ -1593,7 +1641,7 @@ namespace MajdataPlay.Scenes.Game
                 _audioSample = null;
             }
         }
-        void ClearAllResources()
+        private void ClearAllResources()
         {
             StopAllCoroutines();
 
@@ -1607,7 +1655,7 @@ namespace MajdataPlay.Scenes.Game
             Majdata<INoteTimeProvider>.Free();
         }
 
-        void OnDestroy()
+        private void OnDestroy()
         {
             try
             {
@@ -1620,7 +1668,15 @@ namespace MajdataPlay.Scenes.Game
             {
                 Cursor.visible = true;
                 InputManager.UseOuterTouchAsSensor = false;
-                MajInstances.SceneSwitcher.ShowMV();
+                InputManager.UseGameplayTouchEnhancementFeatures = false;
+                InputManager.Override_TouchSimulationRadius = 0.1f;
+                InputManager.Override_TouchAAreaExtraRadius = 0f;
+                InputManager.Override_TouchBAreaExtraRadius = 0f;
+                InputManager.Override_TouchCAreaExtraRadius = 0f;
+                InputManager.Override_TouchDAreaExtraRadius = 0f;
+                InputManager.Override_TouchEAreaExtraRadius = 0f;
+
+                MajInstances.BackgroundVideo.Show();
             }
         }
         #endregion

@@ -1,26 +1,25 @@
 using Cysharp.Threading.Tasks;
+using LitMotion;
 using MajdataPlay.Buffers;
+using MajdataPlay.Diagnostics;
 using MajdataPlay.IO;
-using MajdataPlay.Recording;
+using MajdataPlay.Net;
 using MajdataPlay.Scenes.Game;
-using MajdataPlay.Scenes.Setting;
-using MajdataPlay.Settings;
 using MajdataPlay.Settings.Runtime;
-using MajdataPlay.Utils;
+using MajdataPlay.Settings.Sync;
 using System;
 using System.Collections.Generic;
 using System.Linq;
-using System.Runtime.InteropServices;
 using System.Threading;
 using System.Threading.Tasks;
-using MajdataPlay.Net;
 using UnityEngine;
+using UnityEngine.Serialization;
 #nullable enable
 namespace MajdataPlay.Scenes.List
 {
     public class ListManager : MonoBehaviour, ISceneManager
     {
-        const int MAX_ALLOWED_INACTIVE_TIME_MIN = 5;
+        private const int MAX_ALLOWED_INACTIVE_TIME_MIN = 5;
         public CancellationToken CancellationToken
         {
             get
@@ -30,82 +29,88 @@ namespace MajdataPlay.Scenes.List
         }
         public static List<Task> AllBackgroundTasks { get; } = new(8192);
 
-        int _delta = 0;
-        float _pressTime = 0;
-        bool _isPressed = false;
+        private float _pressTime = 0;
+        private bool _isPressed = false;
 
         // Update control
-        bool _isInited = false;
-        bool _isExited = false;
+        private bool _isInited = false;
+        private bool _isExited = false;
 
-        bool _isOnlineEnabled = false;
+        private bool _isOnlineEnabled = false;
 
-        bool _isPlayedExplosion = false;
+        private bool _isPlayedExplosion = false;
 
-        float _autoSlideTimer = 0f;
-        float _enterPracticeTimer = 0f;
-        float _inactiveTimeSec = 0f;
+        private float _enterPracticeTimer = 0f;
+        private float _logoutTimer = 0f;
+        private float _refreshTimer = 0f;
+        private float _recommendRefreshTimer = 0f;
+        private float _inactiveTimeSec = 0f;
 
-        CoverListDisplayer _coverListDisplayer;
         [SerializeField]
-        UserInfoDisplayer _userInfoDisplayer;
+        [FormerlySerializedAs("coverListManager")]
+        private CoverListManager _coverListManager;
 
-        const float AUTO_SLIDE_INTERVAL_SEC = 0.15f;
-        const float AUTO_SLIDE_TRIGGER_TIME_SEC = 0.4f;
+        [SerializeField]
+        [FormerlySerializedAs("collectionListManager")]
+        private CollectionListManager _collectionListManager;
 
-        readonly ListConfig _listConfig = MajEnv.RuntimeConfig?.List ?? new();
-        readonly SwitchStatistic[] _buttonPressTimes = new SwitchStatistic[12];
-        readonly CancellationTokenSource _cts = new();
+        [SerializeField]
+        [FormerlySerializedAs("userProfileDisplayer")]
+        private UserInfoDisplayer _userProfileDisplayer;
+
+        [SerializeField]
+        [FormerlySerializedAs("favoriteAdder")]
+        private FavoriteAdder _favoriteAdder;
+
+        private const float AUTO_SLIDE_INTERVAL_SEC = 0.15f;
+        private const float AUTO_SLIDE_TRIGGER_TIME_SEC = 0.4f;
+        private const float LOGOUT_TRIGGER_TIME_SEC = 1f;
+        // How often the List checks for recommendation feeds to fetch again (SongStorage refetches those older
+        // than 10 minutes), so the server's 30-minute impression window does not lapse while the player browses
+        private const float RECOMMEND_REFRESH_CHECK_SEC = 60f;
+        private const int QUICK_SLIDE_POSITION_INCREASE = 9;
+        private const float QUICK_SLIDE_DURATION_SEC = 0.5f;
+
+        private int _quickSlideRemaining = 0;
+        private int _quickSlideDirection = 0;
+        private MotionHandle _quickSlideAnim;
+
+        private float _cAreaPressTime = -1f;
+
+        private readonly ListConfig _listConfig = MajEnv.RuntimeConfig.List;
+        private readonly CancellationTokenSource _cts = new();
+        private readonly QuickSlideJudge _quickSlideJudge = new();
+        private InputRepeatState _listSlideInput;
 
 
-        void Awake()
+        private void Awake()
         {
             Majdata<ListManager>.Instance = this;
             InputManager.TouchButtonRingEdge = 4.8f;
-            if (AllBackgroundTasks.Count > 4096)
+            try
             {
-                var indexs = Pool<int>.RentArray(AllBackgroundTasks.Count);
-                try
-                {
-                    var i2 = -1;
-                    var count = 0;
-                    Parallel.For(0, AllBackgroundTasks.Count, i =>
-                    {
-                        var task = AllBackgroundTasks[i];
-                        if (task is null || task.IsCompleted)
-                        {
-                            indexs[Interlocked.Increment(ref i2)] = i;
-                            Interlocked.Increment(ref count);
-                        }
-                    });
-                    for (var i = 0; i < count; i++)
-                    {
-                        AllBackgroundTasks.RemoveAt(indexs[i]);
-                    }
-                }
-                finally
-                {
-                    Pool<int>.ReturnArray(indexs);
-                }
+                // One linear pass. Removing by indices collected out of order shifted every later index and
+                // removed the wrong tasks once the list exceeded the old parallel threshold.
+                AllBackgroundTasks.RemoveAll(task => task is null || task.IsCompleted);
             }
-            else
+            catch (Exception ex)
             {
-                for (var i = 0; i < AllBackgroundTasks.Count; i++)
-                {
-                    var task = AllBackgroundTasks[i];
-                    if (task is null || task.IsCompleted)
-                    {
-                        AllBackgroundTasks.RemoveAt(i);
-                        i--;
-                    }
-                }
+                MajDebug.LogError("[ListManager] [Awake] " + ex.Message);
             }
-            _isOnlineEnabled = MajEnv.Settings.Online.Enable;
+            _isOnlineEnabled = MajEnv.SystemSettings.Network.Online.Enable;
+
+
+            _favoriteAdder.PressToAddTime = 0.5f;
+            _favoriteAdder.PressToRemoveTime = 0.5f;
+
+            SongStorage.RestoreSelection();
+
             InputManager.BindAnyArea(OnAnyInput);
         }
-        void Start()
+        private void Start()
         {
-            _coverListDisplayer = Majdata<CoverListDisplayer>.Instance!;
+            _coverListManager = Majdata<CoverListManager>.Instance!;
+            _collectionListManager = Majdata<CollectionListManager>.Instance!;
             InitializeCoverListAsync().Forget();
             var selectsfx = MajInstances.AudioManager.GetSFX("bgm_select.mp3");
             if (!selectsfx.IsPlaying)
@@ -117,310 +122,294 @@ namespace MajdataPlay.Scenes.List
             DisplayUserInfo();
         }
 
-        void DisplayUserInfo()
+        private void DisplayUserInfo()
         {
             //TODO: display multiple endpoints
-            var apiendpoint = MajEnv.Settings.Online.ApiEndpoints.FirstOrDefault();
-            if (apiendpoint is not null)
-            {
-                _userInfoDisplayer.DisplayUserInfo(apiendpoint);
-            }
-            else
-            {
-                _userInfoDisplayer.gameObject.SetActive(false);
-            }
+            var apiEndpoint = MajEnv.ApiEndpoints.FirstOrDefault(x => x.RuntimeConfig.IsLoggedIn)
+                           ?? MajEnv.ApiEndpoints.FirstOrDefault();
+
+            _userProfileDisplayer.DisplayUserInfo(apiEndpoint);
         }
 
-        async UniTaskVoid InitializeCoverListAsync()
+        private async UniTaskVoid InitializeCoverListAsync()
         {
             try
             {
                 await UniTask.Yield();
-                _coverListDisplayer.SwitchToDirList();
-                _coverListDisplayer.SwitchToSongList();
+                _collectionListManager.Init();
+                //_coverListDisplayer.SwitchToDirList();
+                //_coverListDisplayer.SwitchToSongList();
                 await UniTask.Yield();
             }
             finally
             {
                 MajInstances.SceneSwitcher.FadeOut();
-                _coverListDisplayer.SlideToDifficulty((int)_listConfig.SelectedDiff);
+                _listSlideInput.SuppressUntilRelease();
                 _isInited = true;
-                LedRing.SetButtonLight(Color.green, 3);
-                LedRing.SetButtonLight(Color.red, 4);
-                LedRing.SetButtonLight(Color.blue, 2);
-                LedRing.SetButtonLight(Color.blue, 5);
-                LedRing.SetButtonLight(Color.yellow, 6);
-                LedRing.SetButtonLight(Color.yellow, 1);
+                CabinetLed.SetButtonLight(Color.green, 3);
+                CabinetLed.SetButtonLight(Color.red, 4);
+                CabinetLed.SetButtonLight(Color.blue, 2);
+                CabinetLed.SetButtonLight(Color.blue, 5);
+                CabinetLed.SetButtonLight(Color.yellow, 6);
+                CabinetLed.SetButtonLight(Color.yellow, 1);
             }
         }
-        void OnDestroy()
+        private void OnDestroy()
         {
             _isExited = true;
             _cts.Cancel();
+
             InputManager.TouchButtonRingEdge = 5.4f;
             InputManager.UnbindAnyArea(OnAnyInput);
             Majdata<ListManager>.Free();
             MajEnv.SharedHttpClient.CancelPendingRequests();
         }
-        void Update()
+        private void Update()
         {
             if (_isExited || !_isInited)
             {
                 return;
             }
-            ButtonStatisticsUpdate();
-            SensorCheck();
-            ButtonCheck();
-            _inactiveTimeSec += MajTimeline.UnscaledDeltaTime;
-            if (_isOnlineEnabled && TimeSpan.FromSeconds(_inactiveTimeSec) > TimeSpan.FromMinutes(MAX_ALLOWED_INACTIVE_TIME_MIN))
+            _recommendRefreshTimer += MajTimeline.UnscaledDeltaTime;
+            if (_recommendRefreshTimer >= RECOMMEND_REFRESH_CHECK_SEC)
             {
-                EnterLogin();
-                return;
+                _recommendRefreshTimer = 0f;
+                _ = SongStorage.RefreshStaleRecommendAsync();
+            }
+            _quickSlideJudge.OnUpdate();
+            var isMathed = false;
+            if (_quickSlideJudge.IsLeftMatch)
+            {
+                isMathed = true;
+                if (_quickSlideDirection == -1)
+                {
+                    _quickSlideRemaining -= QUICK_SLIDE_POSITION_INCREASE;
+                    if (_quickSlideRemaining < 0)
+                    {
+                        _quickSlideDirection = 1;
+                        _quickSlideRemaining *= -1;
+                    }
+                }
+                else
+                {
+                    _quickSlideDirection = 1;
+                    _quickSlideRemaining += QUICK_SLIDE_POSITION_INCREASE;
+                }
+                MajDebug.LogDebug($"[List] Quick slide remaining: {_quickSlideRemaining}");
+            }
+            else if (_quickSlideJudge.IsRightMatch)
+            {
+                isMathed = true;
+                if (_quickSlideDirection == 1)
+                {
+                    _quickSlideRemaining -= QUICK_SLIDE_POSITION_INCREASE;
+                    if (_quickSlideRemaining < 0)
+                    {
+                        _quickSlideDirection = -1;
+                        _quickSlideRemaining *= -1;
+                    }
+                }
+                else
+                {
+                    _quickSlideDirection = -1;
+                    _quickSlideRemaining += QUICK_SLIDE_POSITION_INCREASE;
+                }
+                MajDebug.LogDebug($"[List] Quick slide remaining: {_quickSlideRemaining}");
+            }
+            if (isMathed)
+            {
+                _quickSlideAnim.TryCancel();
+                var lastIndex = 0;
+                _quickSlideAnim = LMotion.Create(0, _quickSlideRemaining * _quickSlideDirection, QUICK_SLIDE_DURATION_SEC)
+                                         .WithEase(Ease.Linear)
+                                         .WithOnComplete(() =>
+                                         {
+                                             _quickSlideRemaining = 0;
+                                             _quickSlideDirection = 0;
+                                         })
+                                         .Bind(x =>
+                                         {
+                                             if (x == lastIndex)
+                                             {
+                                                 return;
+                                             }
+                                             lastIndex = x;
+                                             _quickSlideRemaining -= 1;
+                                             _coverListManager.SlideList(1 * _quickSlideDirection, loadDelayMS: 1000);
+                                         });
+            }
+            if (_quickSlideRemaining == 0)
+            {
+                var areaIgnoreList = (stackalloc bool[33]);
+                _quickSlideJudge.GenerateIgnoreAreaList(areaIgnoreList);
+                SensorCheck(areaIgnoreList);
+                ButtonCheck();
+                _inactiveTimeSec += MajTimeline.UnscaledDeltaTime;
+                if (_isOnlineEnabled && TimeSpan.FromSeconds(_inactiveTimeSec) > TimeSpan.FromMinutes(MAX_ALLOWED_INACTIVE_TIME_MIN))
+                {
+                    EnterLogin();
+                    return;
+                }
             }
         }
-        void OnAnyInput(object? sender, InputEventArgs args)
+        private void OnAnyInput(object? sender, InputEventArgs args)
         {
             _inactiveTimeSec = 0;
         }
-        void SensorCheck()
+        private void SensorCheck(ReadOnlySpan<bool> areaIgnoreList)
         {
             if (_isExited || !_isInited)
             {
                 return;
             }
 
-            if (InputManager.IsSensorClickedInThisFrame_OR(SensorArea.A7, SensorArea.E8))
+            if (InputManager.IsSensorPressedInThisFrame(SensorArea.B8))
             {
-                _coverListDisplayer.SlideList(1);
+                _collectionListManager.PreviousCollection();
+                return;
             }
-            else if (InputManager.IsSensorClickedInThisFrame_OR(SensorArea.B8, SensorArea.A8))
+            else if (InputManager.IsSensorPressedInThisFrame(SensorArea.B1))
             {
-                _coverListDisplayer.SlideList(2);
-            }
-            else if (InputManager.IsSensorClickedInThisFrame_OR(SensorArea.E1, SensorArea.D1, SensorArea.A1))
-            {
-                _coverListDisplayer.SlideList(3);
-            }
-            else if (InputManager.IsSensorClickedInThisFrame_OR(SensorArea.A6, SensorArea.E6))
-            {
-                _coverListDisplayer.SlideList(-1);
-            }
-            else if (InputManager.IsSensorClickedInThisFrame_OR(SensorArea.A5, SensorArea.B5))
-            {
-                _coverListDisplayer.SlideList(-2);
-            }
-            else if (InputManager.IsSensorClickedInThisFrame_OR(SensorArea.E5, SensorArea.D5, SensorArea.A4))
-            {
-                _coverListDisplayer.SlideList(-3);
-            }
-            else if (InputManager.IsSensorClickedInThisFrame(SensorArea.C))
-            {
-                _coverListDisplayer.RandomSelect();
+                _collectionListManager.NextCollection();
+                return;
             }
 
-            if (InputManager.IsSensorClickedInThisFrame_OR(SensorArea.B7, SensorArea.B6, SensorArea.E7))
+            if (InputManager.IsSensorPressedInThisFrame(SensorArea.D5) ||
+                InputManager.IsSensorPressedInThisFrame(SensorArea.E5))
             {
                 var list = new string[]
-                            {
-                                "no_touch.wav",
-                                "no_touch_2.wav",
-                                "no_touch_3.wav",
-                                "no_touch_4.wav",
-                                "no_touch_5.wav",
-                                "no_touch_6.wav",
-                                "no_touch_7.wav"
-                            };
+                {
+                    "no_touch.wav",
+                    "no_touch_2.wav",
+                    "no_touch_3.wav",
+                    "no_touch_4.wav",
+                    "no_touch_5.wav",
+                    "no_touch_6.wav",
+                    "no_touch_7.wav"
+                };
                 MajInstances.AudioManager.PlaySFX(list[UnityEngine.Random.Range(0, list.Length)]);
                 XxlbAnimation.instance.PlayTouchAnimation();
             }
-            if (InputManager.IsSensorClickedInThisFrame(SensorArea.B2))
+            if (areaIgnoreList[(int)SensorArea.B2])
             {
-                _coverListDisplayer.FavoriteAdder.FavoratePressed();
+                _favoriteAdder.SetState(false);
             }
-        }
-        void ButtonStatisticsUpdate()
-        {
-            if (_isExited || !_isInited)
+            else if (!_favoriteAdder.State && InputManager.IsSensorClickedInThisFrame(SensorArea.B2))
             {
-                return;
+                _favoriteAdder.SetState(true);
             }
-            ReadOnlySpan<ButtonZone> zones = stackalloc ButtonZone[]
+            else if (_favoriteAdder.State && InputManager.CheckSensorStatusInThisFrame(SensorArea.B2, SwitchStatus.Off))
             {
-                ButtonZone.A1,
-                ButtonZone.A2,
-                ButtonZone.A3,
-                ButtonZone.A4,
-                ButtonZone.A5,
-                ButtonZone.A6,
-                ButtonZone.A7,
-                ButtonZone.A8,
-                ButtonZone.Test,
-                ButtonZone.P1,
-                ButtonZone.Service,
-                ButtonZone.P2,
-            };
-            for (var i = 0; i < zones.Length; i++)
+                _favoriteAdder.SetState(false);
+            }
+            if (!areaIgnoreList[(int)SensorArea.C])
             {
-                ref readonly var zone = ref zones[i];
-                ref var btnStatistic = ref _buttonPressTimes[i];
-                var isPressed = InputManager.CheckButtonStatusInThisFrame(zone, SwitchStatus.On);
-
-                btnStatistic.IsPressed = isPressed;
-                btnStatistic.IsReleased = InputManager.CheckButtonStatusInPreviousFrame(zone, SwitchStatus.On) &&
-                                          InputManager.CheckButtonStatusInThisFrame(zone, SwitchStatus.Off);
-                btnStatistic.IsClicked = InputManager.IsButtonClickedInThisFrame(zone);
-                if(btnStatistic.IsClicked)
+                if (_cAreaPressTime == -1f)
                 {
-                    btnStatistic.IsClickEventUsed = false;
+                    if (InputManager.IsSensorClickedInThisFrame(SensorArea.C))
+                    {
+                        _cAreaPressTime = 0f;
+                    }
                 }
-                if (isPressed)
+                else if (InputManager.CheckSensorStatusInThisFrame(SensorArea.C, SwitchStatus.On))
                 {
-                    btnStatistic.PressTime += MajTimeline.DeltaTime;
+                    if (_cAreaPressTime >= 1f)
+                    {
+                        _cAreaPressTime = -1f;
+                        _coverListManager.RandomSelect();
+                    }
+                    else
+                    {
+                        _cAreaPressTime += MajTimeline.DeltaTime;
+                    }
                 }
                 else
                 {
-                    btnStatistic.PressTime = 0;
+                    _cAreaPressTime = -1f;
                 }
             }
         }
-        void ButtonCheck()
+        private void ButtonCheck()
         {
             if (_isExited || !_isInited)
             {
                 return;
             }
 
-            ref var a1Statistic = ref _buttonPressTimes[(int)ButtonZone.A1];
-            ref var a2Statistic = ref _buttonPressTimes[(int)ButtonZone.A2];
-            ref var a3Statistic = ref _buttonPressTimes[(int)ButtonZone.A3];
-            ref var a4Statistic = ref _buttonPressTimes[(int)ButtonZone.A4];
-            ref var a5Statistic = ref _buttonPressTimes[(int)ButtonZone.A5];
-            ref var a6Statistic = ref _buttonPressTimes[(int)ButtonZone.A6];
-            ref var a7Statistic = ref _buttonPressTimes[(int)ButtonZone.A7];
-            ref var a8Statistic = ref _buttonPressTimes[(int)ButtonZone.A8];
-            ref var p1Statistic = ref _buttonPressTimes[(int)ButtonZone.P1];
+            ref readonly var a1State = ref InputManager.GetButtonState(ButtonZone.A1);
+            ref readonly var a2State = ref InputManager.GetButtonState(ButtonZone.A2);
+            ref readonly var a3State = ref InputManager.GetButtonState(ButtonZone.A3);
+            ref readonly var a4State = ref InputManager.GetButtonState(ButtonZone.A4);
+            ref readonly var a5State = ref InputManager.GetButtonState(ButtonZone.A5);
+            ref readonly var a6State = ref InputManager.GetButtonState(ButtonZone.A6);
+            ref readonly var a7State = ref InputManager.GetButtonState(ButtonZone.A7);
+            ref readonly var a8State = ref InputManager.GetButtonState(ButtonZone.A8);
+            ref readonly var p1State = ref InputManager.GetButtonState(ButtonZone.P1);
 
-            if (a3Statistic.IsPressed)
+            _logoutTimer = a5State.IsPressed ? _logoutTimer + MajTimeline.DeltaTime : 0f;
+            _refreshTimer = p1State.IsPressed ? _refreshTimer + MajTimeline.DeltaTime : 0f;
+
+            if (a4State.ReleaseCompletedThisFrame)
             {
-                _delta = 1;
-                if (a3Statistic.IsClicked)
+                if (a4State.ReleaseHeldDuration > 1f && _coverListManager.SelectedSong is not null)
                 {
-                    _coverListDisplayer.SlideList(1);
+                    EnterPractice();
                 }
-                else
+                else if (_collectionListManager.SelectedCollection.Type == ChartStorageType.Dan)
                 {
-                    if(a3Statistic.PressTime > AUTO_SLIDE_TRIGGER_TIME_SEC)
-                    {
-                        if(_autoSlideTimer > AUTO_SLIDE_INTERVAL_SEC)
-                        {
-                            _coverListDisplayer.DisableAnimation = true;
-                            _coverListDisplayer.SlideList(_delta);
-                            _autoSlideTimer = 0;
-                        }
-                        else
-                        {
-                            _autoSlideTimer += MajTimeline.DeltaTime;
-                        }
-                    }
+                    EnterDan();
+                }
+                else if (_coverListManager.SelectedSong is not null)
+                {
+                    EnterGame();
                 }
                 return;
             }
-            else if (a6Statistic.IsPressed)
+            if (p1State.ReleaseCompletedThisFrame)
             {
-                _delta = -1;
-                if (a6Statistic.IsClicked)
+                EnterSortAndFind();
+                return;
+            }
+
+            if (a3State.IsPressed || a6State.IsPressed)
+            {
+                if (_listSlideInput.Update(
+                    a3State.IsPressed,
+                    a6State.IsPressed,
+                    MajTimeline.DeltaTime,
+                    AUTO_SLIDE_TRIGGER_TIME_SEC,
+                    AUTO_SLIDE_INTERVAL_SEC,
+                    out var direction))
                 {
-                    _coverListDisplayer.SlideList(-1);
-                }
-                else
-                {
-                    if (a6Statistic.PressTime > AUTO_SLIDE_TRIGGER_TIME_SEC)
-                    {
-                        if (_autoSlideTimer > AUTO_SLIDE_INTERVAL_SEC)
-                        {
-                            _coverListDisplayer.DisableAnimation = true;
-                            _coverListDisplayer.SlideList(_delta);
-                            _autoSlideTimer = 0;
-                        }
-                        else
-                        {
-                            _autoSlideTimer += MajTimeline.DeltaTime;
-                        }
-                    }
+                    _coverListManager.SlideList(direction);
                 }
                 return;
             }
             else
             {
-                _autoSlideTimer = 0;
-                _coverListDisplayer.DisableAnimation = false;
+                _listSlideInput.Reset();
             }
 
-            if (a4Statistic.IsClicked)
+            if (a4State.IsPressed && _coverListManager.SelectedSong is not null)
             {
-                if(_coverListDisplayer.IsDirList)
-                {
-                    if (_coverListDisplayer.SelectedCollection.Type == ChartStorageType.Dan)
-                    {
-                        EnterDan();
-                    }
-                    else
-                    {
-                        LedRing.SetButtonLight(Color.red, 4);
-                        _coverListDisplayer.SwitchToSongList();
-                        _coverListDisplayer.SlideListToTop();
-                        if (SongStorage.WorkingCollection.IsOnline)
-                        {
-                            MajInstances.AudioManager.PlaySFX("online_page.wav");
-                        }
-                    }
-                    a4Statistic.IsClickEventUsed = true;
-                }
-            }
-            else if (a4Statistic.IsPressed)
-            {
-                if (_coverListDisplayer.IsChartList)
-                {
-                    if(!_isPlayedExplosion)
-                    {
-                        if(_enterPracticeTimer > 1f)
-                        {
-                            MajInstances.AudioManager.PlaySFX("bgm_explosion.mp3");
-                            _isPlayedExplosion = true;
-                        }
-                    }
-                    if (_enterPracticeTimer > 1.6f)
-                    {
-                        EnterPractice();
-                    }
-                    _enterPracticeTimer += MajTimeline.DeltaTime;
-                    return;
-                }
-            }
-            else if (a4Statistic.IsReleased)
-            {
-                if (_coverListDisplayer.IsChartList && !a4Statistic.IsClickEventUsed)
+                if (!_isPlayedExplosion)
                 {
                     if (_enterPracticeTimer > 1f)
                     {
-                        EnterPractice();
-                    }
-                    else
-                    {
-                        EnterGame();
+                        MajInstances.AudioManager.PlaySFX("bgm_explosion.mp3");
+                        _isPlayedExplosion = true;
                     }
                 }
+                if (_enterPracticeTimer > 1.6f)
+                {
+                    EnterPractice();
+                }
+                _enterPracticeTimer += MajTimeline.DeltaTime;
                 return;
             }
-            else if (a5Statistic.IsClicked)
+            else if (a5State.IsPressed)
             {
-                if (_coverListDisplayer.IsChartList)
-                {
-                    _coverListDisplayer.SwitchToDirList();
-                    LedRing.SetButtonLight(Color.white, 4);
-                    SongStorage.WorkingCollection.Index = 0;
-                }
-                else if (_isOnlineEnabled && _coverListDisplayer.IsDirList)
+                if (_isOnlineEnabled && _logoutTimer >= LOGOUT_TRIGGER_TIME_SEC)
                 {
                     EnterLogin();
                 }
@@ -428,69 +417,43 @@ namespace MajdataPlay.Scenes.List
             }
             else
             {
-                _enterPracticeTimer = 0;
+                _enterPracticeTimer = 0f;
             }
 
-            if (p1Statistic.IsClicked || p1Statistic.IsPressed || p1Statistic.IsReleased)
+            if (p1State.IsPressed)
             {
-                if(p1Statistic.PressTime >= 3f)
+                if (_refreshTimer >= 3f)
                 {
                     RefreshList();
                 }
-                else if(p1Statistic.IsReleased)
-                {
-                    EnterSortAndFind();
-                }
                 return;
             }
-            else if (a2Statistic.IsClicked)
+            if (a2State.ClickCompletedThisFrame)
             {
-                //const int MOD_PAGE_INDEX = 5;
-                //MajInstances.GameManager.LastSettingPage = MOD_PAGE_INDEX;
-                MajEnv.RuntimeConfig.Setting.SelectedMenu = nameof(GameSetting.Mod);
-                MajEnv.RuntimeConfig.Setting.SelectedOption = string.Empty;
-                if (_coverListDisplayer.Mode == CoverListMode.Directory)
-                {
-                    MajEnv.RuntimeConfig.Setting.IgnoreChartSettingPage = true;
-                }
-                else
-                {
-                    MajEnv.RuntimeConfig.Setting.IgnoreChartSettingPage = false;
-                }
-                MajInstances.SceneSwitcher.SwitchScene("Setting", false);
-                _isExited = true;
+                EnterSortAndFind();
                 return;
             }
-            else if (a7Statistic.IsClicked)
+            else if (a7State.ClickCompletedThisFrame)
             {
-                //MajInstances.GameManager.LastSettingPage = 0;
-                if (_coverListDisplayer.Mode == CoverListMode.Directory)
-                {
-                    MajEnv.RuntimeConfig.Setting.IgnoreChartSettingPage = true;
-                }
-                else
-                {
-                    MajEnv.RuntimeConfig.Setting.IgnoreChartSettingPage = false;
-                }
                 MajInstances.SceneSwitcher.SwitchScene("Setting", false);
                 _isExited = true;
                 return;
             }
 
-            if (a8Statistic.IsClicked)
+            if (a8State.PressedThisFrame)
             {
-                _coverListDisplayer.SlideDifficulty(-1);
+                _collectionListManager.SlideDifficulty(-1);
                 var list = new string[] { "easy.wav", "basic.wav", "advanced.wav", "expert.wav", "master.wav", "remaster.wav", "original.wav" };
                 MajInstances.AudioManager.PlaySFX(list[(int)_listConfig.SelectedDiff]);
             }
-            else if (a1Statistic.IsClicked)
+            else if (a1State.PressedThisFrame)
             {
-                _coverListDisplayer.SlideDifficulty(1);
+                _collectionListManager.SlideDifficulty(1);
                 var list = new string[] { "easy.wav", "basic.wav", "advanced.wav", "expert.wav", "master.wav", "remaster.wav", "original.wav" };
                 MajInstances.AudioManager.PlaySFX(list[(int)_listConfig.SelectedDiff]);
             }
         }
-        void EnterGame()
+        private void EnterGame()
         {
             _cts.Cancel();
             MajInstances.AudioManager.StopSFX("bgm_select.mp3");
@@ -502,15 +465,18 @@ namespace MajdataPlay.Scenes.List
             };
             var charts = new ISongDetail[]
             {
-                _coverListDisplayer.SelectedSong
+                _coverListManager.SelectedSong
             };
+            // A stale feed is served again first; posted before that, the impression would find no record to mark
+            var recommendRefresh = SongStorage.RefreshStaleRecommendAsync();
+            RecommendImpressions.Commit(_collectionListManager.SelectedCollection, _coverListManager.SelectedSong, recommendRefresh);
             var info = new GameInfo(GameMode.Normal, charts, levels);
             Majdata<GameInfo>.Instance = info;
             _pressTime = 0;
             _isExited = true;
             MajInstances.SceneSwitcher.SwitchScene("Game", false);
         }
-        void EnterPractice()
+        private void EnterPractice()
         {
             _cts.Cancel();
             var levels = new ChartLevel[]
@@ -519,8 +485,11 @@ namespace MajdataPlay.Scenes.List
             };
             var charts = new ISongDetail[]
             {
-                _coverListDisplayer.SelectedSong
+                _coverListManager.SelectedSong
             };
+            // A stale feed is served again first; posted before that, the impression would find no record to mark
+            var recommendRefresh = SongStorage.RefreshStaleRecommendAsync();
+            RecommendImpressions.Commit(_collectionListManager.SelectedCollection, _coverListManager.SelectedSong, recommendRefresh);
             var oldinfo = Majdata<GameInfo>.Instance;
             var info = new GameInfo(GameMode.Practice, charts, levels, 114514);
             if (oldinfo is not null && oldinfo.TimeRange is not null)
@@ -533,13 +502,13 @@ namespace MajdataPlay.Scenes.List
             _isExited = true;
             MajInstances.SceneSwitcher.SwitchScene("Practice", false);
         }
-        void EnterSortAndFind()
+        private void EnterSortAndFind()
         {
             _cts.Cancel();
             MajInstances.SceneSwitcher.SwitchScene("SortFind");
             _isExited = true;
         }
-        void RefreshList()
+        private void RefreshList()
         {
             _cts.Cancel();
             MajInstances.AudioManager.StopSFX("bgm_select.mp3");
@@ -547,7 +516,8 @@ namespace MajdataPlay.Scenes.List
             _isExited = true;
             RefreshListBackgroundAsync();
         }
-        static async void RefreshListBackgroundAsync()
+        /// <summary>Refreshes local collections, online collections, and online favorites before returning to the list scene.</summary>
+        private static async void RefreshListBackgroundAsync()
         {
             var sceneSwitcher = MajInstances.SceneSwitcher;
             await sceneSwitcher.FadeInAsync();
@@ -556,7 +526,7 @@ namespace MajdataPlay.Scenes.List
             sceneSwitcher.SetLoadingText("MAJTEXT_WAITING_FOR_BACKGROUND_TASKS_SUSPEND".i18n());
             await UniTask.Delay(100);
             var bTasks = WaitForBackgroundTaskSuspendAsync();
-            while(!bTasks.IsCompleted)
+            while (!bTasks.IsCompleted)
             {
                 await UniTask.Yield();
             }
@@ -565,12 +535,18 @@ namespace MajdataPlay.Scenes.List
             {
                 MajInstances.SceneSwitcher.SetLoadingText(e);
             };
-            var task = SongStorage.RefreshAsync(progress);
-            while(!task.IsCompleted)
+            var localRefreshTask = SongStorage.RefreshLocal(progress);
+            while (!localRefreshTask.IsCompleted)
             {
                 await UniTask.Yield();
             }
-            if (!task.IsCompletedSuccessfully)
+            var onlineRefreshTask = SongStorage.RefreshOnline(progress);
+            while (!onlineRefreshTask.IsCompleted)
+            {
+                await UniTask.Yield();
+            }
+            var isListRefreshSuccessful = localRefreshTask.IsCompletedSuccessfully && onlineRefreshTask.IsCompletedSuccessfully;
+            if (!isListRefreshSuccessful)
             {
                 sceneSwitcher.SetLoadingText("MAJTEXT_ERR_SCAN_CHARTS_FAILED".i18n(), Color.red);
             }
@@ -578,14 +554,36 @@ namespace MajdataPlay.Scenes.List
             {
                 sceneSwitcher.SetLoadingText(string.Empty);
             }
+
+            // Before the favorites, which may leave an error on the loading screen
+            var recommendTask = SongStorage.RefreshRecommendAsync(progress);
+            while (!recommendTask.IsCompleted)
+            {
+                await UniTask.Yield();
+            }
+
+            var onlineFavoritesTask = SongStorage.RefreshUserOnlineFavAsync(progress);
+            while (!onlineFavoritesTask.IsCompleted)
+            {
+                await UniTask.Yield();
+            }
+            if (!onlineFavoritesTask.IsCompletedSuccessfully || !onlineFavoritesTask.Result)
+            {
+                sceneSwitcher.SetLoadingText("MAJTEXT_ERR_SCAN_ONLINE_FAV_COLLECTION_FAILED".i18n(), Color.red);
+            }
+            else if (isListRefreshSuccessful)
+            {
+                sceneSwitcher.SetLoadingText(string.Empty);
+            }
+
             await UniTask.Delay(3000);
             sceneSwitcher.SwitchScene("List", false);
         }
-        void EnterDan()
+        private void EnterDan()
         {
             _cts.Cancel();
-            var danInfo = _coverListDisplayer.SelectedCollection.DanInfo;
-            var collection = _coverListDisplayer.SelectedCollection;
+            var danInfo = _collectionListManager.SelectedCollection.DanInfo;
+            var collection = _collectionListManager.SelectedCollection;
             if (danInfo is null)
             {
                 return;
@@ -603,17 +601,18 @@ namespace MajdataPlay.Scenes.List
             }
             var info = new GameInfo(GameMode.Dan, collection.ToArray(), levels)
             {
-                MaxHP = _coverListDisplayer.SelectedCollection.DanInfo.StartHP,
-                CurrentHP = _coverListDisplayer.SelectedCollection.DanInfo.StartHP,
-                HPRecover = _coverListDisplayer.SelectedCollection.DanInfo.RestoreHP,
+                MaxHP = danInfo.StartHP,
+                CurrentHP = danInfo.StartHP,
+                HPRecover = danInfo.RestoreHP,
                 DanInfo = danInfo
             };
             Majdata<GameInfo>.Instance = info;
-            _coverListDisplayer.SelectedCollection.Index = 0;
+            _ = SongStorage.RefreshStaleRecommendAsync();
+            _collectionListManager.SelectedCollection.Index = 0;
             _isExited = true;
             MajInstances.SceneSwitcher.SwitchScene("Game", false);
         }
-        void EnterLogin()
+        private void EnterLogin()
         {
             _cts.Cancel();
             _pressTime = 0;
@@ -622,7 +621,7 @@ namespace MajdataPlay.Scenes.List
             ScoreManager.UnloadOnlineScores();
             EnterLoginBackgroundAsync();
         }
-        async void EnterLoginBackgroundAsync()
+        private async void EnterLoginBackgroundAsync()
         {
             var sceneSwitcher = MajInstances.SceneSwitcher;
             await sceneSwitcher.FadeInAsync();
@@ -637,11 +636,13 @@ namespace MajdataPlay.Scenes.List
             }
             await UniTask.Delay(100);
             sceneSwitcher.SetLoadingText("MAJTEXT_LOGGING_OUT".i18n() + "...");
-            var task = Online.LogoutAllAsync();
+            var task = Online.Account.LogoutAllAsync();
             while (!task.IsCompleted)
             {
                 await UniTask.Yield();
             }
+            // Leaving the account brings back the local settings the account copy replaced.
+            await UserSettingSync.DetachAsync();
             sceneSwitcher.SetLoadingText(string.Empty);
             await UniTask.Delay(1000);
             sceneSwitcher.SwitchScene("Login");
@@ -653,8 +654,8 @@ namespace MajdataPlay.Scenes.List
                 return Task.CompletedTask;
             }
             var isAnyRunning = false;
-            using var tasks = new RentedList<Task>();
-            foreach(var task in AllBackgroundTasks)
+            using var tasks = new PooledList<Task>();
+            foreach (var task in AllBackgroundTasks)
             {
                 if (!task.IsCompleted)
                 {
@@ -667,6 +668,212 @@ namespace MajdataPlay.Scenes.List
                 return Task.CompletedTask;
             }
             return Task.WhenAll(tasks);
+        }
+
+        private class QuickSlideJudge
+        {
+            public bool IsLeftMatch { get; private set; }
+            public bool IsRightMatch { get; private set; }
+
+            private readonly Path[] _leftPathList = new Path[]
+            {
+                // Left
+                new Path(SensorArea.C, SensorArea.B7, new SensorArea[] { SensorArea.E7 }),
+                new Path(SensorArea.C, SensorArea.B6, new SensorArea[] { SensorArea.E7 }),
+
+                new Path(SensorArea.B2, SensorArea.C, new SensorArea[] { SensorArea.B7 }),
+                new Path(SensorArea.B2, SensorArea.C, new SensorArea[] { SensorArea.B6 }),
+
+                new Path(SensorArea.B3, SensorArea.C, new SensorArea[] { SensorArea.B7 }),
+                new Path(SensorArea.B3, SensorArea.C, new SensorArea[] { SensorArea.B6 }),
+
+                new Path(SensorArea.B2, SensorArea.C, new SensorArea[] { SensorArea.B7 }),
+                new Path(SensorArea.B3, SensorArea.C, new SensorArea[] { SensorArea.B6 }),
+
+                new Path(SensorArea.E3, SensorArea.B2, new SensorArea[] { SensorArea.C }),
+                new Path(SensorArea.E3, SensorArea.B3, new SensorArea[] { SensorArea.C }),
+
+
+                new Path(SensorArea.D3, SensorArea.E3, new SensorArea[] { SensorArea.B2, SensorArea.C }),
+                new Path(SensorArea.D3, SensorArea.E3, new SensorArea[] { SensorArea.B3, SensorArea.C }),
+            };
+            private readonly Path[] _rightPathList = new Path[]
+            {
+                // Right
+                new Path(SensorArea.C, SensorArea.B2, new SensorArea[] { SensorArea.E3 }),
+                new Path(SensorArea.C, SensorArea.B3, new SensorArea[] { SensorArea.E3 }),
+
+                new Path(SensorArea.B7, SensorArea.C, new SensorArea[] { SensorArea.B2 }),
+                new Path(SensorArea.B7, SensorArea.C, new SensorArea[] { SensorArea.B3 }),
+
+                new Path(SensorArea.B6, SensorArea.C, new SensorArea[] { SensorArea.B3 }),
+                new Path(SensorArea.B6, SensorArea.C, new SensorArea[] { SensorArea.B2 }),
+
+                new Path(SensorArea.D7, SensorArea.E7, new SensorArea[] { SensorArea.B7, SensorArea.C }),
+                new Path(SensorArea.D7, SensorArea.E7, new SensorArea[] { SensorArea.B6, SensorArea.C }),
+            };
+
+            public void OnUpdate()
+            {
+                IsLeftMatch = false;
+                IsRightMatch = false;
+
+                for (var i = 0; i < _leftPathList.Length; i++)
+                {
+                    ref var path = ref _leftPathList[i];
+                    if (IsLeftMatch || IsRightMatch)
+                    {
+                        path.Reset();
+                    }
+                    else
+                    {
+                        path.OnUpdate();
+                        IsLeftMatch |= path.IsMatch;
+                    }
+                }
+                for (var i = 0; i < _rightPathList.Length; i++)
+                {
+                    ref var path = ref _rightPathList[i];
+                    if (IsLeftMatch || IsRightMatch)
+                    {
+                        path.Reset();
+                    }
+                    else
+                    {
+                        path.OnUpdate();
+                        IsRightMatch |= path.IsMatch;
+                    }
+                }
+            }
+            public void GenerateIgnoreAreaList(Span<bool> areaList)
+            {
+                for (var i = 0; i < 33; i++)
+                {
+                    var area = (SensorArea)i;
+                    for (var x = 0; x < _leftPathList.Length; x++)
+                    {
+                        var path = _leftPathList[x];
+                        areaList[i] |= path.IsShouldBeIgnored(area);
+                    }
+                    for (var x = 0; x < _rightPathList.Length; x++)
+                    {
+                        var path = _rightPathList[x];
+                        areaList[i] |= path.IsShouldBeIgnored(area);
+                    }
+                }
+            }
+
+            private struct Path
+            {
+                public bool IsMatch { get; private set; }
+
+                private byte _state;
+                private TimeSpan _detectStartAt;
+
+                private readonly SensorArea _headArea;
+                private readonly SensorArea _area2;
+                private readonly SensorArea[] _tailAreaList;
+                private readonly TimeSpan _timeout;
+                public Path(SensorArea headArea, SensorArea area2, SensorArea[] tailAreaList)
+                    : this(headArea, area2, tailAreaList, TimeSpan.FromMilliseconds(300))
+                {
+
+                }
+                public Path(SensorArea headArea, SensorArea area2, SensorArea[] tailAreaList, TimeSpan timeout)
+                {
+                    _headArea = headArea;
+                    _area2 = area2;
+                    _tailAreaList = tailAreaList;
+                    _timeout = timeout;
+                }
+
+                public void OnUpdate()
+                {
+                    if (IsMatch)
+                    {
+                        Reset();
+                    }
+                    var currentTimestamp = MajTimeline.UnscaledTime;
+                    if (_state == 0)
+                    {
+                        if (InputManager.IsSensorClickedInThisFrame(_headArea))
+                        {
+                            _state = 1;
+                            _detectStartAt = currentTimestamp;
+                        }
+                        else
+                        {
+                            return;
+                        }
+                    }
+                    else if (currentTimestamp - _detectStartAt > _timeout)
+                    {
+                        Reset();
+                        return;
+                    }
+                    if ((_state & (1 << 1)) == 0)
+                    {
+                        if (InputManager.IsSensorClickedInThisFrame(_area2))
+                        {
+                            _state |= 1 << 1;
+                        }
+                        else
+                        {
+                            return;
+                        }
+                    }
+                    var allFinished = 0b0000_0011;
+                    for (var i = 0; i < _tailAreaList.Length; i++)
+                    {
+                        var area = _tailAreaList[i];
+                        var mask = (byte)(1 << (i + 2));
+                        allFinished |= mask;
+                        if ((_state & mask) == 0)
+                        {
+                            if (InputManager.IsSensorClickedInThisFrame(area))
+                            {
+                                _state |= mask;
+                            }
+                            else
+                            {
+                                break;
+                            }
+                        }
+                    }
+                    if (_state == allFinished)
+                    {
+                        IsMatch = true;
+                    }
+                }
+                public void Reset()
+                {
+                    IsMatch = false;
+                    _state = 0;
+                    _detectStartAt = TimeSpan.Zero;
+                }
+                public bool IsShouldBeIgnored(SensorArea area)
+                {
+                    if ((_state & (1 << 1)) == 0)
+                    {
+                        return false;
+                    }
+                    if (area == _area2 || area == _headArea)
+                    {
+                        return true;
+                    }
+                    else
+                    {
+                        for (var i = 0; i < _tailAreaList.Length; i++)
+                        {
+                            if (area == _tailAreaList[i] && ((_state & (1 << (i + 2))) != 0))
+                            {
+                                return true;
+                            }
+                        }
+                        return false;
+                    }
+                }
+            }
         }
     }
 }

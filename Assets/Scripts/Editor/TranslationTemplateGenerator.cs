@@ -33,7 +33,9 @@ namespace MajdataPlay.Editor
             },
             { "List", new string[]
                 {
-                    "INPUT_HINT"
+                    "INPUT_HINT",
+                    "EMPTY_COLLECTION",
+                    "NO_PLAY_RECORD"
                 }
             }
         };
@@ -46,7 +48,8 @@ namespace MajdataPlay.Editor
             "MAJTEXT_SCORE_SENDING",
             "MAJTEXT_LOADING_CHART",
             "MAJTEXT_WAITING_FOR_BACKGROUND_TASKS_SUSPEND",
-            "MAJTEXT_LOGING_OUT",
+            "MAJTEXT_WAITING_FOR_RECORDER",
+            "MAJTEXT_LOGGING_OUT",
             "MAJTEXT_LOADING_SCORE_STORAGE",
             "MAJTEXT_LOADING_SKIN",
             "MAJTEXT_DESERIALIZATION",
@@ -63,7 +66,10 @@ namespace MajdataPlay.Editor
             "MAJTEXT_PRESS_ANY_KEY",
             "MAJTEXT_SAY",
             "MAJTEXT_SCANNING_CHARTS",
-            "MAJTEXT_SCANNING_CHARTS_FROM_{0}"
+            "MAJTEXT_SCANNING_CHARTS_FROM_{0}",
+            "MAJTEXT_CLEANING_UP",
+            "MAJTEXT_ONLINE_MACHINE_AUTH_REQUEST_FAILED",
+            "MAJTEXT_ONLINE_MACHINE_REGISTRATION_UNSUPPORTED"
         };
         static string[] _err_translations = new string[]
         {
@@ -73,6 +79,7 @@ namespace MajdataPlay.Editor
             "MAJTEXT_ERR_DOWNLOAD_FAILED",
             "MAJTEXT_ERR_LOAD_CHART_FAILED",
             "MAJTEXT_ERR_EMPTY_CHART",
+            "MAJTEXT_ERR_INVALID_SYNTAX",
             "MAJTEXT_ERR_SCAN_CHARTS_FAILED",
             "MAJTEXT_ERR_NO_CHART",
         };

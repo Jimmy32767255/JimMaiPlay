@@ -15,13 +15,17 @@ namespace MajdataPlay.Scenes.Game
         protected override bool PlayResult(in NoteJudgeResult judgeResult)
         {
             bool canPlay;
-            if (judgeResult.IsBreak)
+            if (judgeResult.IsMine && judgeResult.Grade is not (JudgeGrade.Miss or JudgeGrade.TooFast))
             {
-                canPlay = NoteEffectManager.CheckJudgeDisplaySetting(MajInstances.Settings.Display.BreakJudgeType, judgeResult);
+                return false;
+            }
+            else if (judgeResult.IsBreak)
+            {
+                canPlay = NoteEffectManager.CheckJudgeDisplaySetting(MajEnv.UserSettings.Judge.BreakJudgeType, judgeResult);
             }
             else
             {
-                canPlay = NoteEffectManager.CheckJudgeDisplaySetting(MajInstances.Settings.Display.TouchJudgeType, judgeResult);
+                canPlay = NoteEffectManager.CheckJudgeDisplaySetting(MajEnv.UserSettings.Judge.TouchJudgeType, judgeResult);
             }
             if (!canPlay)
             {

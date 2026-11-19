@@ -8,18 +8,26 @@ using UnityEngine;
 
 namespace MajdataPlay
 {
-    internal sealed class DummyLedRenderer: MajSingleton
+    [DontDestroyOnLoad]
+    internal sealed class DummyLedRenderer: MajComponent
     {
         SpriteRenderer[] _dummyLights = Array.Empty<SpriteRenderer>();
+
+        readonly static Color[] _ledRingColors = new Color[8];
         protected override void Awake()
         {
             base.Awake();
+            Majdata<DummyLedRenderer>.SetAsSingleton(this);
             _dummyLights = GameObject.GetComponentsInChildren<SpriteRenderer>();
         }
-        internal void OnPreUpdate()
+        public static void SetLedRingColorData(ReadOnlySpan<Color> colors)
         {
-            var ledColors = LedRing.LedColors;
-            for (var i = 0; i < ledColors.Length; i++)
+            colors.CopyTo(_ledRingColors);
+        }
+        internal void OnLateUpdate()
+        {
+            var ledColors = _ledRingColors.AsSpan();
+            for (var i = 0; i < _dummyLights.Length; i++)
             {
                 _dummyLights[i].color = ledColors[i];
             }

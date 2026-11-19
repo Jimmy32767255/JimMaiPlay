@@ -1,4 +1,5 @@
-﻿using System;
+﻿using MajdataPlay.Buffers.Pools;
+using System;
 using System.Buffers;
 using System.Runtime.CompilerServices;
 
@@ -6,31 +7,28 @@ namespace MajdataPlay.Buffers
 {
     public static class Pool<T>
     {
-        const int MAX_ARRAY_LENGTH = 2 * 1024 * 1024; // 2MB
-        const int MAX_ARRAY_PER_BUCKET = 2048;
+        const int MAX_ARRAY_LENGTH = 512 * 1024; // 0.5MB
+        const int MAX_ARRAY_PER_BUCKET = 128;
 
-        public readonly static ArrayPool<T> ArrayPool = ArrayPool<T>.Create(MAX_ARRAY_LENGTH, MAX_ARRAY_PER_BUCKET);
-        public readonly static MemoryPool<T> MemoryPool = MemoryPool<T>.Shared;
+        const int BYTE_MAX_ARRAY_LENGTH = 1 * 1024 * 1024; // 1MB
+        const int BYTE_MAX_ARRAY_PER_BUCKET = 1024;
 
-        [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        public static T[] RentArray(int length, bool clearArray = false)
+        internal readonly static SharedArrayPool<byte> ByteArrayPool = new(16, BYTE_MAX_ARRAY_LENGTH, BYTE_MAX_ARRAY_PER_BUCKET);
+        internal readonly static SharedArrayPool<T> ArrayPool = new(8, MAX_ARRAY_LENGTH, MAX_ARRAY_PER_BUCKET);
+        internal readonly static MemoryPool<T> MemoryPool = MemoryPool<T>.Shared;
+
+
+        public static PooledArray<T> Rent(int length, bool clearArrayWhenReturn = false)
         {
             if (length < 0)
             {
                 throw new ArgumentOutOfRangeException(nameof(length), $"Length must be greater than 0");
             }
-            else if (length > MAX_ARRAY_LENGTH)
-            {
-                return new T[length];
-            }
-            var array = ArrayPool.Rent(length);
-            if (clearArray)
-            {
-                Array.Clear(array, 0, array.Length);
-            }
-            return array;
+            var pool = GetCurrentArrayPool();
+            var array = pool.Rent(length);
+
+            return new(array, pool, clearArrayWhenReturn);
         }
-        [MethodImpl(MethodImplOptions.AggressiveInlining)]
         public static IMemoryOwner<T> RentMemory(int length)
         {
             if (length <= 0 || length > MemoryPool.MaxBufferSize)
@@ -39,14 +37,14 @@ namespace MajdataPlay.Buffers
             }
             return MemoryPool.Rent(length);
         }
-        public static void ReturnArray(T[] array, bool clearArray = false)
-        {
-            if (array == null)
-            {
-                throw new ArgumentNullException(nameof(array), "Array cannot be null.");
-            }
 
-            ArrayPool.Return(array, clearArray);
+        private static ArrayPool<T> GetCurrentArrayPool()
+        {
+            if (typeof(T) == typeof(byte))
+            {
+                return Unsafe.As<ArrayPool<T>>(ByteArrayPool);
+            }
+            return ArrayPool;
         }
     }
 }

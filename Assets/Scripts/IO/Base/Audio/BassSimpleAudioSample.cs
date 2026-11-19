@@ -1,11 +1,13 @@
+using MajdataPlay.Diagnostics;
 using MajdataPlay.Extensions;
+using MajdataPlay.IO.Storage;
 using MajdataPlay.Numerics;
 using MajdataPlay.Utils;
 using ManagedBass;
 using ManagedBass.Fx;
 using System;
-using System.IO;
 using System.Runtime.InteropServices;
+using System.Threading;
 using System.Threading.Tasks;
 #nullable enable
 namespace MajdataPlay.IO
@@ -65,7 +67,7 @@ namespace MajdataPlay.IO
             set
             {
                 ThrowIfDisposed();
-                _volume = (float)(value.Clamp(0, 2) * _gain * MajInstances.Settings.Audio.Volume.Global.Clamp(0, 1));
+                _volume = (float)(value.Clamp(0, 2) * _gain * MajEnv.UserSettings.Volume.Global.Clamp(0, 1));
                 Bass.ChannelSetAttribute(_stream, ChannelAttribute.Volume, _volume);
             }
         }
@@ -129,7 +131,6 @@ namespace MajdataPlay.IO
 
             MajDebug.LogInfo(Bass.LastError);
             _dataHandle = dataHandle;
-            GameManager.OnAppFocus += OnAppFocus;
         }
         public BassSimpleAudioSample(int stream, double gain, bool speedChange = false): this(stream, gain, default, speedChange)
         {
@@ -173,7 +174,6 @@ namespace MajdataPlay.IO
                 return;
             }
             _isDisposed = true;
-            GameManager.OnAppFocus -= OnAppFocus;
             Bass.ChannelStop(_stream);
             Bass.ChannelSetPosition(_stream, 0);
             if (_stream != -1)
@@ -195,27 +195,7 @@ namespace MajdataPlay.IO
 
             return new ValueTask(Task.CompletedTask);
         }
-        void OnAppFocus(object? sender, bool isFocus)
-        {
-#if UNITY_ANDROID || UNITY_IOS
-            if (_isDisposed)
-            {
-                return;
-            }
-            if (isFocus)
-            {
-                MajDebug.LogDebug("Application regained focus, attempting to restore mixer volume");
-                Bass.ChannelSetAttribute(_stream, ChannelAttribute.Volume, _volume);
-                MajDebug.LogDebug($"[Bass] {Bass.LastError}");
-            }
-            else
-            {
-                MajDebug.LogDebug("Application lost focus, attempting to mute the mixer");
-                Bass.ChannelSetAttribute(_stream, ChannelAttribute.Volume, 0f);
-                MajDebug.LogDebug($"[Bass] {Bass.LastError}");
-            }
-#endif
-        }
+
         static BassSimpleAudioSample Create(byte[] data, bool normalize, bool speedChange)
         {
             var handle = GCHandle.Alloc(data, GCHandleType.Pinned);
@@ -224,7 +204,14 @@ namespace MajdataPlay.IO
             {
                 var decode = BassHelper.CreateStream(addr, 0, data.LongLength, BassFlags.Decode | BassFlags.Prescan | BassFlags.AsyncFile);
                 var stream = 0;
-                stream = BassFx.TempoCreate(decode, BassFlags.Default);
+                if (speedChange)
+                {
+                    stream = BassFx.TempoCreate(decode, BassFlags.Default);
+                }
+                else
+                {
+                    stream = BassHelper.CreateStream(addr, 0, data.LongLength, BassFlags.Prescan | BassFlags.AsyncFile);
+                }
                 Bass.LastError.EnsureSuccessStatusCode();
                 Bass.ChannelSetAttribute(stream, ChannelAttribute.Buffer, 0);
                 //scan the peak here
@@ -233,8 +220,12 @@ namespace MajdataPlay.IO
                 if (normalize)
                 {
                     double channelmax = 0;
-                    while (Bass.ChannelGetPosition(decode, PositionFlags.Decode | PositionFlags.Bytes) < bytelength)
+                    var thisCursorPos = 0L;
+                    var lastCursorPos = -1L;
+                    while (((thisCursorPos = Bass.ChannelGetPosition(decode, PositionFlags.Decode | PositionFlags.Bytes)) < bytelength) &&
+                            thisCursorPos != lastCursorPos)
                     {
+                        lastCursorPos = thisCursorPos;
                         var level = (double)BitHelper.LoWord(Bass.ChannelGetLevel(decode)) / 32768;
                         if (level > channelmax)
                         {
@@ -264,29 +255,55 @@ namespace MajdataPlay.IO
         }
         public static BassSimpleAudioSample Create(string path, bool normalize = true, bool speedChange = false)
         {
-            var buf = File.ReadAllBytes(path);
+            var buf = FileSystem.File.Open(path).ReadAllBytes();
 
             return Create(buf, normalize, speedChange);
         }
         public static async ValueTask<BassSimpleAudioSample> CreateAsync(string path, bool normalize = true, bool speedChange = false)
         {
-            var buf = await File.ReadAllBytesAsync(path);
+            var buf = await FileSystem.File.Open(path).ReadAllBytesAsync();
 
             return Create(buf, normalize, speedChange);
         }
+        /// <summary>Creates a sample that streams an online audio file downloaded by <see cref="MajEnv.SharedHttpClient"/>.</summary>
+        /// <param name="uri">The absolute HTTP or HTTPS address of the audio file.</param>
+        /// <returns>A sample that cannot seek beyond the downloaded data.</returns>
+        /// <remarks>Blocks until the response headers and the beginning of the body have arrived; prefer <see cref="CreateFromUriAsync"/>.</remarks>
+        /// <exception cref="OperationCanceledException">The request was cancelled by the client.</exception>
+        /// <exception cref="System.Net.Http.HttpRequestException">The request failed or returned an error status code.</exception>
+        /// <exception cref="System.IO.IOException">The download failed before the format could be identified.</exception>
+        /// <exception cref="BassException">BASS could not create the stream.</exception>
         public static BassSimpleAudioSample CreateFromUri(Uri uri)
         {
-            var stream = Bass.CreateStream(uri.OriginalString, 0, BassFlags.Prescan | BassFlags.AsyncFile, null);
-            MajDebug.LogInfo(stream);
-            MajDebug.LogInfo(Bass.LastError);
-
-            var sample = new BassSimpleAudioSample(stream, 1, false)
+            return CreateFromUriAsync(uri).AsTask().GetAwaiter().GetResult();
+        }
+        /// <summary>Creates a sample that streams an online audio file downloaded by <see cref="MajEnv.SharedHttpClient"/>.</summary>
+        /// <param name="uri">The absolute HTTP or HTTPS address of the audio file.</param>
+        /// <param name="token">Cancels the request and the stream creation; it does not affect the returned sample.</param>
+        /// <returns>A sample that cannot seek beyond the downloaded data.</returns>
+        /// <remarks>BASS reads the beginning of the body on the thread that resumes the request, so call this off the main thread.</remarks>
+        /// <exception cref="OperationCanceledException"><paramref name="token"/> was cancelled or the request was cancelled by the client.</exception>
+        /// <exception cref="System.Net.Http.HttpRequestException">The request failed or returned an error status code.</exception>
+        /// <exception cref="System.IO.IOException">The download failed before the format could be identified.</exception>
+        /// <exception cref="BassException">BASS could not create the stream.</exception>
+        public static async ValueTask<BassSimpleAudioSample> CreateFromUriAsync(Uri uri, CancellationToken token = default)
+        {
+            var stream = await BassHttpFileSource.CreateStreamAsync(MajEnv.SharedHttpClient, uri, BassFlags.Default, token).ConfigureAwait(false);
+            try
             {
-                CanSeek = false,
-            };
-            sample.Volume = 1;
+                var sample = new BassSimpleAudioSample(stream, 1, false)
+                {
+                    CanSeek = false,
+                };
+                sample.Volume = 1;
 
-            return sample;
+                return sample;
+            }
+            catch
+            {
+                Bass.StreamFree(stream);
+                throw;
+            }
         }
     }
 }

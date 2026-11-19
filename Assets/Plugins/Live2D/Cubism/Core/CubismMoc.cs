@@ -42,7 +42,8 @@ namespace Live2D.Cubism.Core
         {
             if (shouldCheckMocConsistency && !HasMocConsistency(moc3))
             {
-                Debug.LogError("This Moc3 is Invalid. This model generation process is aborted and prefab is not created.");
+                Debug.LogError("This Moc3 is Invalid. This model generation process is aborted and prefab is not created.\n" +
+                                           $"Please check Model's Moc version. This CubismCore supported latest Moc version is `{LatestVersion}`.");
                 return null;
             }
 
@@ -83,7 +84,7 @@ namespace Live2D.Cubism.Core
         /// <summary>
         /// <see cref="Bytes"/> backing field.
         /// </summary>
-        [SerializeField]
+        [SerializeField, HideInInspector]
         private byte[] _bytes;
 
         /// <summary>
@@ -198,6 +199,11 @@ namespace Live2D.Cubism.Core
         {
             get
             {
+                if (!IsRevived)
+                {
+                    Revive();
+                }
+
                 return UnmanagedMoc.MocVersion;
             }
         }

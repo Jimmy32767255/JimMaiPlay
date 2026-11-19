@@ -1,4 +1,5 @@
 using DiscordRPC;
+using MajdataPlay.Diagnostics;
 using MajdataPlay.Scenes.Game;
 using System;
 using UnityEngine;
@@ -54,7 +55,7 @@ namespace MajdataPlay
             {
                 Details = details,
                 State = state,
-                Assets = new Assets()
+                Assets = new DiscordRPC.Assets()
                 {
                     LargeImageKey = _largeImageKey,
                     LargeImageText = _largeImageText,

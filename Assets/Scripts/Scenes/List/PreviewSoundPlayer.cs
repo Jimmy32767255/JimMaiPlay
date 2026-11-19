@@ -1,5 +1,7 @@
 using Cysharp.Threading.Tasks;
+using MajdataPlay.Diagnostics;
 using MajdataPlay.IO;
+using MajdataPlay.Threading;
 using MajdataPlay.Utils;
 using ManagedBass;
 using System;
@@ -15,7 +17,6 @@ namespace MajdataPlay.Scenes.List
 #nullable enable
     public class PreviewSoundPlayer : MonoBehaviour
     {
-        CancellationTokenSource? _cancellationTokenSource = null;
         ISongDetail? _currentPreviewSong = null;
         bool _isPreviewPlaying = false;
         int _previewVersion = 0;
@@ -30,33 +31,25 @@ namespace MajdataPlay.Scenes.List
             return ReferenceEquals(_currentPreviewSong, info) && _isPreviewPlaying;
         }
 
-        public void PlayPreviewSound(ISongDetail info)
+        public void PlayPreviewSound(ISongDetail info, int loadDelayMS = 1000, CancellationToken token = default)
         {
-            if (_cancellationTokenSource is not null)
-            {
-                if (!_cancellationTokenSource.IsCancellationRequested)
-                {
-                    _cancellationTokenSource.Cancel();
-                }
-            }
             _currentPreviewSong = info;
             _isPreviewPlaying = false;
             var previewVersion = ++_previewVersion;
-            LedRing.SetButtonLight(Color.green, 3);
-            CabinetLight.SetLight(1.0f);
-            _cancellationTokenSource = new();
-            ListManager.AllBackgroundTasks.Add(PlayPreviewAsync(info, _cancellationTokenSource.Token, previewVersion));
+            CabinetLed.SetButtonLight(Color.green, 3);
+            CabinetLed.SetCabinetLight(1.0f);
+            ListManager.AllBackgroundTasks.Add(PlayPreviewAsync(info, loadDelayMS, token, previewVersion)
+                                               .Register($"[{nameof(PreviewSoundPlayer)}]Load song preview"));
         }
-        async Task PlayPreviewAsync(ISongDetail info, CancellationToken token, int previewVersion)
+        async Task PlayPreviewAsync(ISongDetail info, int loadDelayMS, CancellationToken token, int previewVersion)
         {
             var selectSound = MajInstances.AudioManager.GetSFX("bgm_select.mp3");
             AudioSampleWrap? previewSample = null;
             try
             {
-                selectSound.SetVolume(MajInstances.Settings.Audio.Volume.BGM);
-                token.ThrowIfCancellationRequested();
-                await UniTask.Delay(1000, cancellationToken: token, cancelImmediately: true);
-                token.ThrowIfCancellationRequested();
+                selectSound.SetVolume(MajEnv.UserSettings.Volume.BGM);
+                await UniTask.SwitchToThreadPool();
+                await Task.Delay(loadDelayMS, cancellationToken: token);
 
                 var simaiChart = await info.GetMaidataAsync(token: token);
                 previewSample = await info.GetPreviewAudioTrackAsync(token: token);
@@ -137,7 +130,7 @@ namespace MajdataPlay.Scenes.List
                     previewLengthSec = Math.Max(0, previewLengthSec);
                 }
                 MajDebug.LogDebug($"Playing preview song\nOffset: {previewOffsetSec}s\nLength: {previewLengthSec}s");
-                previewSample.SetVolume(MajInstances.Settings.Audio.Volume.BGM);
+                previewSample.SetVolume(MajEnv.UserSettings.Volume.BGM);
                 //set sample.CurrentSec Not implmented
                 previewSample.IsLoop = true;
                 if(previewSample.CanSeek)
@@ -161,7 +154,7 @@ namespace MajdataPlay.Scenes.List
                 for (var i = 1f; i > 0; i = i - 0.2f)
                 {
                     token.ThrowIfCancellationRequested();
-                    selectSound.Volume = i * MajInstances.Settings.Audio.Volume.BGM;
+                    selectSound.Volume = i * MajEnv.UserSettings.Volume.BGM;
                     await UniTask.Delay(100, cancellationToken: token, cancelImmediately: true);
                 }
                 while (true)
@@ -176,18 +169,18 @@ namespace MajdataPlay.Scenes.List
                                 for (var i = 1f; i > 0; i = i - 0.2f)
                                 {
                                     token.ThrowIfCancellationRequested();
-                                    previewSample.Volume = i * MajInstances.Settings.Audio.Volume.BGM;
+                                    previewSample.Volume = i * MajEnv.UserSettings.Volume.BGM;
                                     await UniTask.Delay(100, cancellationToken: token, cancelImmediately: true);
                                 }
                                 previewSample.Pause();
                                 await UniTask.Delay(1000, cancellationToken: token, cancelImmediately: true);
-                                previewSample.Volume = MajInstances.Settings.Audio.Volume.BGM;
+                                previewSample.Volume = MajEnv.UserSettings.Volume.BGM;
                                 previewSample.CurrentSec = previewOffsetSec;
                                 previewSample.Play();
                             }
                         }
                     }
-                    previewSample.Volume = MajInstances.Settings.Audio.Volume.BGM;
+                    previewSample.Volume = MajEnv.UserSettings.Volume.BGM;
                     await UniTask.Yield(token, cancelImmediately: true);
                 }
             }
@@ -207,9 +200,8 @@ namespace MajdataPlay.Scenes.List
         }
         private void OnDestroy()
         {
-            _cancellationTokenSource?.Cancel();
             var selectSound = MajInstances.AudioManager.GetSFX("bgm_select.mp3");
-            selectSound.SetVolume(MajInstances.Settings.Audio.Volume.BGM);
+            selectSound.SetVolume(MajEnv.UserSettings.Volume.BGM);
         }
     }
 }

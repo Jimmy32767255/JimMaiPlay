@@ -1,4 +1,5 @@
-﻿using MajdataPlay.Editor;
+﻿using MajdataPlay.Diagnostics;
+using MajdataPlay.Editor;
 using MajdataPlay.IO;
 using MajdataPlay.Settings;
 using System;
@@ -32,8 +33,17 @@ namespace MajdataPlay
         [ReadOnlyField]
         int _frameCount = 0;
 
-        DisplayOptions? _displayOptions;
-        RectTransform _rectTransform;
+        RenderingOptions? _renderingOptions;
+        RectTransform _rectTransform = null!;
+
+        /// <summary>The screen width observed while scheduling the last corner refresh.</summary>
+        private int _lastScreenWidth;
+
+        /// <summary>The screen height observed while scheduling the last corner refresh.</summary>
+        private int _lastScreenHeight;
+
+        /// <summary>The shared layout version observed while scheduling the last corner refresh.</summary>
+        private int _lastLayoutVersion = -1;
 
 
         [SerializeField]
@@ -44,28 +54,36 @@ namespace MajdataPlay
         {
             _rectTransform = GetComponent<RectTransform>();
         }
-        void Update()
+        void LateUpdate()
         {
             if (_frameCount < FRAME_DELAY)
             {
                 _frameCount++;
                 return;
             }
-            else if (_frameCount == FRAME_DELAY)
+            var renderingOptions = _renderingOptions ??= MajEnv.SystemSettings?.Rendering;
+            if (renderingOptions is null)
             {
-                _frameCount++;
-                _displayOptions = MajInstances.Settings?.Display;
-                RefreshCornersPosition();
                 return;
             }
-            var transformDisplay = _displayOptions!.MainScreenTransform;
-            var subDisplayOffset = _displayOptions.SubDisplayOffset;
-            var subDisplayScale = _displayOptions.SubDisplayScale;
-            var screenOffset = _displayOptions.MainScreenOffset;
-            var screenScale = _displayOptions.MainScreenScale;
+            var screenWidth = Screen.width;
+            var screenHeight = Screen.height;
+            if (screenWidth <= 0 || screenHeight <= 0)
+            {
+                return;
+            }
+            var provider = Majdata<ScreenPosCanvasLayoutProvider>.Instance;
+            var layoutVersion = provider != null && provider.HasLayout ? provider.Version : -1;
+            var transformDisplay = renderingOptions.MainScreenTransform;
+            var subDisplayOffset = renderingOptions.SubDisplayOffset;
+            var subDisplayScale = renderingOptions.SubDisplayScale;
+            var screenOffset = renderingOptions.MainScreenOffset;
+            var screenScale = renderingOptions.MainScreenScale;
             var subChanged = subDisplayOffset != _lastSubDisplayOffset || subDisplayScale != _lastSubDisplayScale;
             var mainChanged = screenOffset != _lastMainDisplayOffset || screenScale != _lastMainDisplayScale;
-            var isAnyUpdated = transformDisplay != _lastTransformDisplay || subChanged || mainChanged;
+            var isAnyUpdated = transformDisplay != _lastTransformDisplay || subChanged || mainChanged ||
+                               screenWidth != _lastScreenWidth || screenHeight != _lastScreenHeight ||
+                               layoutVersion != _lastLayoutVersion;
 
             if(isAnyUpdated)
             {
@@ -74,7 +92,18 @@ namespace MajdataPlay
                 _lastMainDisplayOffset = screenOffset;
                 _lastMainDisplayScale = screenScale;
                 _lastTransformDisplay = transformDisplay;
+                _lastScreenWidth = screenWidth;
+                _lastScreenHeight = screenHeight;
+                _lastLayoutVersion = layoutVersion;
+                // Provider (140), appliers (150), and camera mover (100) run first.
+                // Wait one stable frame so CanvasScaler.Update can consume the new reference resolution.
                 _frameCount = FRAME_DELAY;
+                return;
+            }
+            if (_frameCount == FRAME_DELAY)
+            {
+                _frameCount++;
+                RefreshCornersPosition();
             }
         }
         void RefreshCornersPosition()

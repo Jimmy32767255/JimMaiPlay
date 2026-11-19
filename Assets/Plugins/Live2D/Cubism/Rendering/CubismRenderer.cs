@@ -7,10 +7,12 @@
 
 
 using Live2D.Cubism.Core;
-using Live2D.Cubism.Rendering.Masking;
+using Live2D.Cubism.Framework.Json;
+using Live2D.Cubism.Rendering.Util;
 using System;
 using UnityEngine;
 using UnityEngine.Rendering;
+using UnityEngine.Serialization;
 
 
 namespace Live2D.Cubism.Rendering
@@ -18,8 +20,8 @@ namespace Live2D.Cubism.Rendering
     /// <summary>
     /// Wrapper for drawing <see cref="CubismDrawable"/>s.
     /// </summary>
-    [ExecuteInEditMode, RequireComponent(typeof(MeshFilter), typeof(MeshRenderer))]
-    public sealed class CubismRenderer : MonoBehaviour
+    [ExecuteInEditMode, RequireComponent(typeof(MeshRenderer))]
+    public sealed partial class CubismRenderer : MonoBehaviour
     {
         /// <summary>
         /// <see cref="LocalSortingOrder"/> backing field.
@@ -85,42 +87,42 @@ namespace Live2D.Cubism.Rendering
         }
 
         /// <summary>
-        /// <see cref="OverwriteFlagForDrawableMultiplyColors"/> backing field.
+        /// <see cref="DrawObjectMultiplyColorEnabled"/> backing field.
         /// </summary>
-        [SerializeField, HideInInspector]
-        private bool _isOverwrittenDrawableMultiplyColors;
+        [FormerlySerializedAs("_isOverriddenDrawableMultiplyColors")] [SerializeField, HideInInspector]
+        private bool isOverriddenDrawObjectMultiplyColors;
 
         /// <summary>
-        /// Whether to overwrite with multiply color from the model.
+        /// Whether to override with multiply color from the model.
         /// </summary>
-        public bool OverwriteFlagForDrawableMultiplyColors
+        public bool DrawObjectMultiplyColorEnabled
         {
-            get { return _isOverwrittenDrawableMultiplyColors; }
-            set { _isOverwrittenDrawableMultiplyColors = value; }
+            get { return isOverriddenDrawObjectMultiplyColors; }
+            set { isOverriddenDrawObjectMultiplyColors = value; }
         }
 
         /// <summary>
-        /// Last <see cref="OverwriteFlagForDrawableMultiplyColors"/>.
+        /// Last <see cref="DrawObjectMultiplyColorEnabled"/>.
         /// </summary>
         public bool LastIsUseUserMultiplyColor { get; set; }
 
         /// <summary>
-        /// <see cref="OverwriteFlagForDrawableScreenColors"/> backing field.
+        /// <see cref="DrawObjectScreenColorEnabled"/> backing field.
         /// </summary>
-        [SerializeField, HideInInspector]
-        private bool _isOverwrittenDrawableScreenColors;
+        [FormerlySerializedAs("_isOverriddenDrawableScreenColors")] [SerializeField, HideInInspector]
+        private bool _isOverriddenDrawObjectScreenColors;
 
         /// <summary>
-        /// Whether to overwrite with screen color from the model.
+        /// Whether to override with screen color from the model.
         /// </summary>
-        public bool OverwriteFlagForDrawableScreenColors
+        public bool DrawObjectScreenColorEnabled
         {
-            get { return _isOverwrittenDrawableScreenColors; }
-            set { _isOverwrittenDrawableScreenColors = value; }
+            get { return _isOverriddenDrawObjectScreenColors; }
+            set { _isOverriddenDrawObjectScreenColors = value; }
         }
 
         /// <summary>
-        /// Last <see cref="OverwriteFlagForDrawableScreenColors"/>.
+        /// Last <see cref="DrawObjectScreenColorEnabled"/>.
         /// </summary>
         public bool LastIsUseUserScreenColors { get; set; }
 
@@ -137,12 +139,23 @@ namespace Live2D.Cubism.Rendering
         {
             get
             {
-                if (OverwriteFlagForDrawableMultiplyColors || RenderController.OverwriteFlagForModelMultiplyColors)
+                // If it can overwrite multiply color, return it.
+                if (RenderController.MultiplyColorEnabled
+                    || DrawObjectMultiplyColorEnabled)
                 {
                     return _multiplyColor;
                 }
 
-                return Drawable.MultiplyColor;
+                switch (DrawObjectType)
+                {
+                    case CubismModelTypes.DrawObjectType.Drawable:
+                        return Drawable.MultiplyColor;
+                    case CubismModelTypes.DrawObjectType.Offscreen:
+                        return Offscreen.MultiplyColor;
+                    default:
+                        // If we are not a drawable or offscreen, return the default value.
+                        return _multiplyColor;
+                }
             }
             set
             {
@@ -178,12 +191,22 @@ namespace Live2D.Cubism.Rendering
         {
             get
             {
-                if (OverwriteFlagForDrawableScreenColors || RenderController.OverwriteFlagForModelScreenColors)
+                if (RenderController.ScreenColorEnabled
+                    || DrawObjectScreenColorEnabled)
                 {
                     return _screenColor;
                 }
 
-                return Drawable.ScreenColor;
+                switch (DrawObjectType)
+                {
+                    case CubismModelTypes.DrawObjectType.Drawable:
+                        return Drawable.ScreenColor;
+                    case CubismModelTypes.DrawObjectType.Offscreen:
+                        return Offscreen.ScreenColor;
+                    default:
+                        // If we are not a drawable or offscreen, return the default value.
+                        return _screenColor;
+                }
             }
             set
             {
@@ -214,13 +237,22 @@ namespace Live2D.Cubism.Rendering
         {
             get
             {
-                #if UNITY_EDITOR
+#if UNITY_EDITOR
                 if (!Application.isPlaying)
                 {
+                    if (!MeshRenderer.sharedMaterial)
+                    {
+                        MeshRenderer.sharedMaterial = SetMaterialFromPicker();
+                    }
+
                     return MeshRenderer.sharedMaterial;
                 }
-                #endif
+#endif
 
+                if (!MeshRenderer.material)
+                {
+                    MeshRenderer.material = SetMaterialFromPicker();
+                }
 
                 return MeshRenderer.material;
             }
@@ -230,7 +262,6 @@ namespace Live2D.Cubism.Rendering
                 if (!Application.isPlaying)
                 {
                     MeshRenderer.sharedMaterial = value;
-
 
                     return;
                 }
@@ -253,7 +284,16 @@ namespace Live2D.Cubism.Rendering
         /// </summary>
         public Texture2D MainTexture
         {
-            get { return _mainTexture; }
+            get
+            {
+                if (_mainTexture == null && DrawObjectType != CubismModelTypes.DrawObjectType.Drawable)
+                {
+                    _mainTexture = new Texture2D(1, 1);
+                    _mainTexture.SetPixel(1, 1, Color.clear);
+                }
+
+                return _mainTexture;
+            }
             set
             {
                 // Return early if same value given and main texture is valid.
@@ -262,11 +302,18 @@ namespace Live2D.Cubism.Rendering
                     return;
                 }
 
-
-                // Store value.
-                _mainTexture = (value != null)
-                    ? value
-                    : Texture2D.whiteTexture;
+                if (DrawObjectType != CubismModelTypes.DrawObjectType.Drawable)
+                {
+                    _mainTexture = new Texture2D(1, 1);
+                    _mainTexture.SetPixel(1, 1, Color.clear);
+                }
+                else
+                {
+                    // Store value.
+                    _mainTexture = (value != null)
+                        ? value
+                        : Texture2D.whiteTexture;
+                }
 
 
                 // Apply it.
@@ -290,7 +337,7 @@ namespace Live2D.Cubism.Rendering
         private int FrontMesh { get; set; }
 
         /// <summary>
-        /// Index of back buffer mesh..
+        /// Index of back buffer mesh.
         /// </summary>
         private int BackMesh { get; set; }
 
@@ -299,27 +346,16 @@ namespace Live2D.Cubism.Rendering
         /// </summary>
         public Mesh Mesh
         {
-            get { return Meshes[FrontMesh]; }
-        }
-
-
-        /// <summary>
-        /// <see cref="MeshFilter"/> backing field.
-        /// </summary>
-        [NonSerialized]
-        private MeshFilter _meshFilter;
-
-        /// <summary>
-        /// <see cref="UnityEngine.MeshFilter"/>.
-        /// </summary>
-        public MeshFilter MeshFilter
-        {
             get
             {
-                return _meshFilter;
+                if (DrawObjectType == CubismModelTypes.DrawObjectType.Offscreen)
+                {
+                    return _offscreenMesh;
+                }
+
+                return FrontMesh < Meshes?.Length ? Meshes?[FrontMesh] : null;
             }
         }
-
 
         /// <summary>
         /// <see cref="MeshRenderer"/> backing field.
@@ -341,14 +377,66 @@ namespace Live2D.Cubism.Rendering
         }
 
         /// <summary>
+        /// <see cref="MeshFilter"/>'s backing field.
+        /// </summary>
+        [NonSerialized]
+        private MeshFilter _meshFilter;
+
+        /// <summary>
+        /// <see cref="UnityEngine.MeshFilter"/> for Scene View picking support.
+        /// </summary>
+        public MeshFilter MeshFilter
+        {
+            get
+            {
+                TryInitializeMeshFilter();
+                return _meshFilter;
+            }
+
+            set
+            {
+                if (value == _meshFilter || value == null)
+                {
+                    return;
+                }
+
+                _meshFilter = value;
+            }
+        }
+
+        /// <summary>
+        /// <see cref="DrawMaterial"/>'s backing field.
+        /// </summary>
+        [SerializeField, HideInInspector]
+        private Material _drawMaterial;
+
+        /// <summary>
+        /// Material used for CommandBuffer rendering (the actual rendering material).
+        /// </summary>
+        public Material DrawMaterial
+        {
+            get
+            {
+                // Only return _drawMaterial for Drawable type (picking is only for Drawable).
+                if (DrawObjectType != CubismModelTypes.DrawObjectType.Drawable)
+                {
+                    return null;
+                }
+                return _drawMaterial;
+            }
+            set { _drawMaterial = value; }
+        }
+
+
+        /// <summary>
         /// <see cref="CubismDrawable"/>.
         /// </summary>
-        private CubismDrawable Drawable { get; set; }
+        public CubismDrawable Drawable { get; set; }
 
         /// <summary>
         /// <see cref="CubismRenderController"/>.
         /// </summary>
-        private CubismRenderController RenderController { get; set; }
+        internal CubismRenderController RenderController { get; set; }
 
 
         #region Interface For CubismRenderController
@@ -362,9 +450,12 @@ namespace Live2D.Cubism.Rendering
         /// <summary>
         /// Sorting mode.
         /// </summary>
-        private CubismSortingMode SortingMode
+        internal CubismSortingMode SortingMode
         {
-            get { return _sortingMode; }
+            get
+            {
+                return _sortingMode;
+            }
             set { _sortingMode = value; }
         }
 
@@ -426,7 +517,7 @@ namespace Live2D.Cubism.Rendering
         /// <summary>
         /// Opacity.
         /// </summary>
-        private float Opacity
+        internal float Opacity
         {
             get { return _opacity; }
             set { _opacity = value; }
@@ -462,10 +553,6 @@ namespace Live2D.Cubism.Rendering
             BackMesh = FrontMesh;
             FrontMesh = (FrontMesh == 0) ? 1 : 0;
 
-
-            var mesh = Meshes[FrontMesh];
-
-
             // Update colors.
             Meshes[BackMesh].colors = VertexColors;
 
@@ -475,21 +562,9 @@ namespace Live2D.Cubism.Rendering
 
 
             ResetSwapInfoFlags();
-
-
-            // Apply swap.
 #if UNITY_EDITOR
-            if (!Application.isPlaying)
-            {
-                MeshFilter.mesh = mesh;
-
-
-                return;
-            }
+            SyncMeshFilterForPicking();
 #endif
-
-
-            MeshFilter.mesh = mesh;
         }
 
 
@@ -562,7 +637,7 @@ namespace Live2D.Cubism.Rendering
         /// <summary>
         /// Updates depth offset.
         /// </summary>
-        /// <param name="newDepthOffset"></param>
+        /// <param name="newDepthOffset">New depth offset value.</param>
         internal void OnControllerDepthOffsetDidChange(float newDepthOffset)
         {
             DepthOffset = newDepthOffset;
@@ -638,81 +713,35 @@ namespace Live2D.Cubism.Rendering
 
 
         /// <summary>
-        /// Sets mask properties.
-        /// </summary>
-        /// <param name="newMaskProperties">Value to set.</param>
-        internal void OnMaskPropertiesDidChange(CubismMaskProperties newMaskProperties)
-        {
-            MeshRenderer.GetPropertyBlock(SharedPropertyBlock);
-
-            var renderTextureIndex = newMaskProperties.Tile.RenderTextureIndex;
-
-            var texture = newMaskProperties.Texture.RenderTextureCount > 0
-                ? newMaskProperties.Texture.RenderTextures[renderTextureIndex]
-                : (Texture)newMaskProperties.Texture;
-
-            // Write properties.
-            SharedPropertyBlock.SetTexture(CubismShaderVariables.MaskTexture, texture);
-            SharedPropertyBlock.SetVector(CubismShaderVariables.MaskTile, newMaskProperties.Tile);
-            SharedPropertyBlock.SetVector(CubismShaderVariables.MaskTransform, newMaskProperties.Transform);
-
-            MeshRenderer.SetPropertyBlock(SharedPropertyBlock);
-        }
-
-
-        /// <summary>
         /// Sets model opacity.
         /// </summary>
         /// <param name="newModelOpacity">Opacity to set.</param>
         internal void OnModelOpacityDidChange(float newModelOpacity)
         {
-            _meshRenderer.GetPropertyBlock(SharedPropertyBlock);
+            var property = PropertyBlock;
+            _meshRenderer.GetPropertyBlock(property);
 
 
             // Write property.
-            SharedPropertyBlock.SetFloat(CubismShaderVariables.ModelOpacity, newModelOpacity);
+            property.SetFloat(CubismShaderVariables.ModelOpacity, newModelOpacity);
 
-            MeshRenderer.SetPropertyBlock(SharedPropertyBlock);
+            MeshRenderer.SetPropertyBlock(property);
         }
 
         #endregion
-
-        /// <summary>
-        /// <see cref="SharedPropertyBlock"/> backing field.
-        /// </summary>
-        private static MaterialPropertyBlock _sharedPropertyBlock;
-
-        /// <summary>
-        /// <see cref="MaterialPropertyBlock"/> that can be shared on the main script thread.
-        /// </summary>
-        private static MaterialPropertyBlock SharedPropertyBlock
-        {
-            get
-            {
-                // Lazily initialize.
-                if (_sharedPropertyBlock == null)
-                {
-                    _sharedPropertyBlock = new MaterialPropertyBlock();
-                }
-
-
-                return _sharedPropertyBlock;
-            }
-        }
-
 
         /// <summary>
         /// Applies main texture for rendering.
         /// </summary>
         private void ApplyMainTexture()
         {
-            MeshRenderer.GetPropertyBlock(SharedPropertyBlock);
-
+            var property = PropertyBlock;
+            MeshRenderer.GetPropertyBlock(property);
 
             // Write property.
-            SharedPropertyBlock.SetTexture(CubismShaderVariables.MainTexture, MainTexture);
+            property.SetTexture(CubismShaderVariables.MainTexture, MainTexture);
 
-            MeshRenderer.SetPropertyBlock(SharedPropertyBlock);
+            MeshRenderer.SetPropertyBlock(property);
         }
 
         /// <summary>
@@ -720,6 +749,15 @@ namespace Live2D.Cubism.Rendering
         /// </summary>
         private void ApplySorting()
         {
+            // Return early if no controller or model.
+            if (!RenderController
+                || !RenderController.Model)
+            {
+                return;
+            }
+
+            RenderController.DidChangeSorting = true;
+
             // Sort by order.
             if (SortingMode.SortByOrder())
             {
@@ -751,6 +789,8 @@ namespace Live2D.Cubism.Rendering
         /// </summary>
         public void ApplyVertexColors()
         {
+
+
             var vertexColors = VertexColors;
             var color = Color;
 
@@ -773,13 +813,19 @@ namespace Live2D.Cubism.Rendering
         /// </summary>
         public void ApplyMultiplyColor()
         {
-            MeshRenderer.GetPropertyBlock(SharedPropertyBlock);
+            if (DrawObjectType != CubismModelTypes.DrawObjectType.Drawable)
+            {
+                return;
+            }
+
+            var property = PropertyBlock;
+            MeshRenderer.GetPropertyBlock(property);
 
 
             // Write property.
-            SharedPropertyBlock.SetColor(CubismShaderVariables.MultiplyColor, MultiplyColor);
+            property.SetColor(CubismShaderVariables.MultiplyColor, MultiplyColor);
 
-            MeshRenderer.SetPropertyBlock(SharedPropertyBlock);
+            MeshRenderer.SetPropertyBlock(property);
         }
 
         /// <summary>
@@ -791,6 +837,11 @@ namespace Live2D.Cubism.Rendering
 
             LastMultiplyColor = MultiplyColor;
 
+            if (DrawObjectType != CubismModelTypes.DrawObjectType.Drawable)
+            {
+                return;
+            }
+
             ApplyMultiplyColor();
         }
 
@@ -799,13 +850,19 @@ namespace Live2D.Cubism.Rendering
         /// </summary>
         public void ApplyScreenColor()
         {
-            MeshRenderer.GetPropertyBlock(SharedPropertyBlock);
+            if (DrawObjectType != CubismModelTypes.DrawObjectType.Drawable)
+            {
+                return;
+            }
+
+            var property = PropertyBlock;
+            MeshRenderer.GetPropertyBlock(property);
 
 
             // Write property.
-            SharedPropertyBlock.SetColor(CubismShaderVariables.ScreenColor, ScreenColor);
+            property.SetColor(CubismShaderVariables.ScreenColor, ScreenColor);
 
-            MeshRenderer.SetPropertyBlock(SharedPropertyBlock);
+            MeshRenderer.SetPropertyBlock(property);
         }
 
         /// <summary>
@@ -817,7 +874,46 @@ namespace Live2D.Cubism.Rendering
 
             LastScreenColor = ScreenColor;
 
+            if (DrawObjectType != CubismModelTypes.DrawObjectType.Drawable)
+            {
+                return;
+            }
+
             ApplyScreenColor();
+        }
+
+        /// <summary>
+        /// Sets material from picker.
+        /// </summary>
+        public Material SetMaterialFromPicker()
+        {
+            Material material = null;
+
+            switch (DrawObjectType)
+            {
+                case CubismModelTypes.DrawObjectType.Drawable:
+                    if (!Drawable)
+                    {
+                        break;
+                    }
+
+                    material = CubismBuiltinPickers.DrawableMaterialPicker(null, Drawable);
+                    break;
+                case CubismModelTypes.DrawObjectType.Offscreen:
+                    if (!Offscreen)
+                    {
+                        break;
+                    }
+
+                    material = CubismBuiltinPickers.OffscreenMaterialPicker(null, Offscreen);
+                    break;
+                default:
+                    material = CubismBuiltinMaterials.GetBlendModeMaterial("UnlitBlendMode", BlendTypes.ColorBlend.Normal, BlendTypes.AlphaBlend.Over, false, false, true);
+                    Debug.LogError("Unsupported DrawObjectType.");
+                    break;
+            }
+
+            return material;
         }
 
         /// <summary>
@@ -825,13 +921,13 @@ namespace Live2D.Cubism.Rendering
         /// </summary>
         private void TryInitializeMeshRenderer()
         {
-            if (_meshRenderer == null)
+            if (!_meshRenderer)
             {
                 _meshRenderer = GetComponent<MeshRenderer>();
 
 
                 // Lazily add component.
-                if (_meshRenderer == null)
+                if (!_meshRenderer)
                 {
                     _meshRenderer = gameObject.AddComponent<MeshRenderer>();
                     _meshRenderer.hideFlags = HideFlags.HideInInspector;
@@ -840,27 +936,111 @@ namespace Live2D.Cubism.Rendering
                     _meshRenderer.lightProbeUsage = LightProbeUsage.BlendProbes;
                 }
             }
+
+#if UNITY_EDITOR
+            if (!Application.isPlaying)
+            {
+                if (!_meshRenderer.sharedMaterial)
+                {
+                    _meshRenderer.sharedMaterial = SetMaterialFromPicker();
+                }
+
+                return;
+            }
+#endif
+
+            if (!_meshRenderer.material)
+            {
+                _meshRenderer.material = SetMaterialFromPicker();
+            }
         }
 
-
         /// <summary>
-        /// Initializes the mesh filter.
+        /// Initializes the mesh filter for Scene View picking.
         /// </summary>
         private void TryInitializeMeshFilter()
         {
+#if UNITY_EDITOR
+            if (DrawObjectType != CubismModelTypes.DrawObjectType.Drawable
+                || Application.isPlaying)
+            {
+                return;
+            }
+
+            if (_meshFilter != null)
+            {
+                return;
+            }
+
+            _meshFilter = GetComponent<MeshFilter>();
+
+            // Lazily add component if missing.
             if (_meshFilter == null)
             {
-                _meshFilter = GetComponent<MeshFilter>();
+                _meshFilter = gameObject.AddComponent<MeshFilter>();
+                _meshFilter.hideFlags = HideFlags.HideInInspector;
+            }
 
+            _meshFilter.sharedMesh = Mesh;
+             SetupPickingMaterial();
+#endif
+        }
 
-                // Lazily add component.
-                if (_meshFilter == null)
+#if UNITY_EDITOR
+        /// <summary>
+        /// Sets up materials for Scene View picking.
+        /// </summary>
+        private void SetupPickingMaterial()
+        {
+            if (_meshRenderer == null)
+            {
+                return;
+            }
+
+            var currentMaterial = _meshRenderer.sharedMaterial;
+
+            if (_drawMaterial == null)
+            {
+                // If current material is TransparentPicking or null, get the correct material via picker.
+                if (currentMaterial == null
+                    || currentMaterial == CubismBuiltinMaterials.TransparentPicking
+                    || (currentMaterial.shader != null && currentMaterial.shader.name == "Live2D Cubism/TransparentPicking"))
                 {
-                    _meshFilter = gameObject.AddComponent<MeshFilter>();
-                    _meshFilter.hideFlags = HideFlags.HideInInspector;
+                    _drawMaterial = SetMaterialFromPicker();
+                }
+                else
+                {
+                    _drawMaterial = currentMaterial;
                 }
             }
+
+            _meshRenderer.sharedMaterial = CubismBuiltinMaterials.TransparentPicking;
+
+            // Set MainTexture for alpha test in picking shader.
+            if (MainTexture != null)
+            {
+                ApplyMainTexture();
+            }
         }
+
+        /// <summary>
+        /// Syncs the current mesh to the MeshFilter for Scene View picking.
+        /// </summary>
+        private void SyncMeshFilterForPicking()
+        {
+            if (DrawObjectType != CubismModelTypes.DrawObjectType.Drawable)
+            {
+                return;
+            }
+
+            if (_meshFilter == null || Mesh == null)
+            {
+                return;
+            }
+
+            _meshFilter.sharedMesh = Mesh;
+        }
+#endif
 
 
         /// <summary>
@@ -869,29 +1049,48 @@ namespace Live2D.Cubism.Rendering
         private void TryInitializeMesh()
         {
             // Only create mesh if necessary.
-            // HACK 'Mesh.vertex > 0' makes sure mesh is recreated in case of runtime instantiation.
-            if (Meshes != null && Mesh.vertexCount > 0)
+            // HACK: 'Mesh != null' is individually implemented to avoid errors caused by the absence of a backing field.
+            // HACK: 'Mesh.vertex > 0' makes sure mesh is recreated in case of runtime instantiation.
+            if ((Meshes != null && Meshes.Length == 2
+                && Mesh != null && Mesh.vertexCount > 0
+                && Drawable?.VertexPositions != null && Mesh.vertexCount == Drawable?.VertexPositions.Length)
+                || (DrawObjectType == CubismModelTypes.DrawObjectType.Offscreen && _offscreenMesh))
             {
                 return;
             }
 
-
-            if (Meshes == null)
+            if (DrawObjectType == CubismModelTypes.DrawObjectType.Offscreen)
             {
-                Meshes = new Mesh[2];
+                Meshes = new Mesh[1];
+                _offscreenMesh = new Mesh
+                {
+                    vertices = OffscreenVertices,
+                    uv = OffscreenUVs,
+                    triangles = OffscreenTriangle
+                };
+                Meshes[0] = _offscreenMesh;
+                return;
             }
 
 
+            if (Meshes != null)
+            {
+                for (var i = 0; i < Meshes.Length; i++)
+                {
+                    DestroyImmediate(Meshes[i]);
+                }
+            }
+
+            Meshes = new Mesh[2];
+
             for (var i = 0; i < 2; ++i)
             {
-                var mesh = new Mesh
-                {
-                    name = Drawable.name,
-                    vertices = Drawable.VertexPositions,
-                    uv = Drawable.VertexUvs,
-                    triangles = Drawable.Indices
-                };
+                var mesh = new Mesh();
 
+                mesh.name = Drawable.name;
+                mesh.vertices = Drawable.VertexPositions;
+                mesh.uv = Drawable.VertexUvs;
+                mesh.triangles = Drawable.Indices;
 
                 mesh.MarkDynamic();
                 mesh.RecalculateBounds();
@@ -907,6 +1106,11 @@ namespace Live2D.Cubism.Rendering
         /// </summary>
         private void TryInitializeVertexColor()
         {
+            if (Mesh == null)
+            {
+                return;
+            }
+
             var mesh = Mesh;
 
 
@@ -925,34 +1129,43 @@ namespace Live2D.Cubism.Rendering
         /// </summary>
         private void TryInitializeMainTexture()
         {
-            if (MainTexture == null)
+            if (!MainTexture)
             {
-                MainTexture = null;
+                MainTexture = Texture2D.whiteTexture;
             }
 
 
             ApplyMainTexture();
         }
 
-
         /// <summary>
         /// Initializes components if possible.
         /// </summary>
         public void TryInitialize(CubismRenderController renderController)
         {
-            Drawable = GetComponent<CubismDrawable>();
             RenderController = renderController;
 
+            if (!RenderController.Model)
+            {
+                return;
+            }
+
+            InitializeDrawObject();
+
             TryInitializeMeshRenderer();
-            TryInitializeMeshFilter();
 
             TryInitializeMesh();
+            TryInitializeMeshFilter();
             TryInitializeVertexColor();
             TryInitializeMainTexture();
             TryInitializeMultiplyColor();
             TryInitializeScreenColor();
+            _previousOffscreenUnmanagedIndex = -1;
 
             ApplySorting();
+#if UNITY_EDITOR
+            SyncMeshFilterForPicking();
+#endif
         }
 
         #region Swap Info

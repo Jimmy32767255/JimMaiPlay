@@ -1,11 +1,8 @@
-﻿using Cysharp.Text;
+﻿using MajdataPlay.Settings.Runtime;
 using System;
 using System.Collections.Generic;
-using System.Linq;
+using System.Globalization;
 using System.Reflection;
-using System.Text;
-using System.Threading.Tasks;
-using Unity.Collections.LowLevel.Unsafe;
 #nullable enable
 namespace MajdataPlay.Settings.OptionEnumerators
 {
@@ -40,7 +37,8 @@ namespace MajdataPlay.Settings.OptionEnumerators
                 return LocalizedValueTexts[ValueIndex];
             }
         }
-
+        // Setting preloads the finite value labels before navigation starts.
+        internal IReadOnlyList<string> LocalizedValuesForWarmup => LocalizedValueTexts;
         protected int ModeFlag = 0;
 
         protected object Value
@@ -95,11 +93,36 @@ namespace MajdataPlay.Settings.OptionEnumerators
         protected FieldInfo? FieldInfo;
         protected PropertyInfo? PropertyInfo;
 
-        protected readonly Utf16PreparedFormat<string, object> ValueTextLocalizationTemplate = ZString.PrepareUtf16<string, object>("MAJSETTING_PROPERTY_{0}_OPTION_{1}");
-        protected readonly Utf16PreparedFormat<object> GeneralValueTextLocalizationTemplate = ZString.PrepareUtf16<object>("MAJSETTING_GENERAL_OPTION_{0}");
+        /// <summary>
+        /// Gets how the value texts are localized, as selected by the translation attributes of the member.
+        /// </summary>
+        private protected SettingTranslation ValueTranslation { get; private set; } = SettingTranslation.DefaultOptionValue;
 
+        /// <summary>
+        /// Gets how the <c>UNSET</c> and <c>NULL</c> placeholders of a missing value are localized.
+        /// </summary>
+        /// <remarks>
+        /// The placeholders are words rather than values of the member type, so they always fall back to the general table
+        /// after the keys of the option (see <see cref="SettingTranslation.ResolvePlaceholder"/>).
+        /// </remarks>
+        private protected SettingTranslation PlaceholderTranslation { get; private set; } = SettingTranslation.DefaultOptionValue;
+
+        /// <summary>
+        /// Gets the values that <see cref="TranslateValuesAttribute"/> translates while the other option values stay untranslated.
+        /// </summary>
+        private protected SettingValueSelection SelectedValues { get; private set; } = SettingValueSelection.Empty;
+
+        /// <summary>
+        /// Gets the values that <see cref="DisableValuesAttribute"/> removes from the choices on the current platform.
+        /// </summary>
+        private protected SettingDisabledValues DisabledValues { get; private set; } = SettingDisabledValues.None;
 
         Type _memberType = null!;
+        Attribute[] _attributes = Array.Empty<Attribute>();
+        // True for numeric members including nullable ones; their values are only translated on explicit request.
+        bool _hasNumericValues;
+        // True for numeric members marked with FoldNumberAttribute; their untranslated values are shown folded.
+        bool _foldsNumbers;
 
         public void Init(FieldInfo fieldInfo, object field)
         {
@@ -115,6 +138,7 @@ namespace MajdataPlay.Settings.OptionEnumerators
             Target = field;
             ModeFlag = FLAG_FIELD_MODE;
             _memberType = fieldInfo.FieldType;
+            _attributes = SettingReflectionCache.GetAttributes(fieldInfo);
             IsFloatType = _memberType == typeof(float) || _memberType == typeof(double) ||
                           _memberType == typeof(decimal);
             IsIntType = _memberType == typeof(int) || _memberType == typeof(long) ||
@@ -124,8 +148,9 @@ namespace MajdataPlay.Settings.OptionEnumerators
             IsOptional = GetCustomAttribute<OptionalAttribute>() != null;
             IsReadOnly = GetCustomAttribute<ReadOnlyOptionAttribute>() != null || FieldInfo.IsInitOnly;
             Name = fieldInfo.Name;
+            InitTranslation();
+            DisabledValues = SettingDisabledValues.Resolve(_attributes, Name, _memberType);
             InitInternal();
-            Localization.OnLanguageChanged += OnLanguageChanged;
         }
         public void Init(PropertyInfo propertyInfo, object property)
         {
@@ -141,6 +166,7 @@ namespace MajdataPlay.Settings.OptionEnumerators
             Target = property;
             ModeFlag = FLAG_PROPERTY_MODE;
             _memberType = propertyInfo.PropertyType;
+            _attributes = SettingReflectionCache.GetAttributes(propertyInfo);
             IsFloatType = _memberType == typeof(float) || _memberType == typeof(double) ||
                           _memberType == typeof(decimal);
             IsIntType = _memberType == typeof(int) || _memberType == typeof(long) ||
@@ -150,8 +176,9 @@ namespace MajdataPlay.Settings.OptionEnumerators
             IsOptional = GetCustomAttribute<OptionalAttribute>() != null;
             IsReadOnly = GetCustomAttribute<ReadOnlyOptionAttribute>() != null || !PropertyInfo.CanWrite;
             Name = propertyInfo.Name;
+            InitTranslation();
+            DisabledValues = SettingDisabledValues.Resolve(_attributes, Name, _memberType);
             InitInternal();
-            Localization.OnLanguageChanged += OnLanguageChanged;
         }
 
         public virtual bool MoveNext()
@@ -188,9 +215,17 @@ namespace MajdataPlay.Settings.OptionEnumerators
 
             return true;
         }
-        public virtual void OnUpdate()
+        public virtual void Refresh()
         {
-
+            var value = Value;
+            for (var i = 0; i < OptionValues.Length; i++)
+            {
+                if (Equals(OptionValues[i], value))
+                {
+                    ValueIndex = i;
+                    return;
+                }
+            }
         }
 
         protected abstract void InitInternal();
@@ -200,54 +235,123 @@ namespace MajdataPlay.Settings.OptionEnumerators
             LocalizedValueTexts = new string[OptionValues.Length];
             for (int i = 0; i < OptionValues.Length; i++)
             {
-                ValueTexts[i] = OptionValues[i]?.ToString() ?? 
-                    (IsOptional ? "UNSET" : "NULL");
-                if (!ValueTextLocalizationTemplate.Format(Name, ValueTexts[i]).Tryi18n(out var localizedText) &&
-                    !GeneralValueTextLocalizationTemplate.Format(ValueTexts[i]).Tryi18n(out localizedText))
-                {
-                    localizedText = ValueTexts[i];
-                }
-                LocalizedValueTexts[i] = localizedText;
+                ValueTexts[i] = GetValueText(OptionValues[i]);
+                LocalizedValueTexts[i] = LocalizeValueText(OptionValues[i], ValueTexts[i]);
             }
         }
-        protected virtual void OnLanguageChanged(object? sender, Language e)
+        /// <summary>
+        /// Formats an option value as the invariant-culture text the translation keys and the attribute arguments use.
+        /// </summary>
+        /// <remarks>
+        /// Without this a device whose decimal separator is a comma would feed <c>"0,5"</c> into the key templates, so a
+        /// <see cref="TranslateValuesAttribute"/> entry written as <c>"0.5"</c> would no longer match. Text that is not a
+        /// number keeps its own <see cref="object.ToString()"/>, which describes enums and labels the same way everywhere.
+        /// </remarks>
+        /// <param name="value">The option value, or null for a missing value.</param>
+        /// <returns>The invariant-culture number text, the value's own text, or the placeholder of a missing value.</returns>
+        protected string GetValueText(object? value)
+        {
+            if (value is null)
+            {
+                return IsOptional ? "UNSET" : "NULL";
+            }
+            return value is IFormattable formattable
+                ? formattable.ToString(null, CultureInfo.InvariantCulture)
+                : value.ToString() ?? (IsOptional ? "UNSET" : "NULL");
+        }
+        public virtual void RefreshLocalization()
         {
             for (var i = 0; i < OptionValues.Length; i++)
             {
-                if (!ValueTextLocalizationTemplate.Format(Name, ValueTexts[i]).Tryi18n(out var localizedText) &&
-                    !GeneralValueTextLocalizationTemplate.Format(ValueTexts[i]).Tryi18n(out localizedText))
-                {
-                    localizedText = ValueTexts[i];
-                }
-                LocalizedValueTexts[i] = localizedText;
+                LocalizedValueTexts[i] = LocalizeValueText(OptionValues[i], ValueTexts[i]);
             }
+        }
+        /// <summary>
+        /// Localizes the display text of one option value according to <see cref="ValueTranslation"/>.
+        /// </summary>
+        /// <remarks>
+        /// Numeric values are not translated unless the member opts in with <see cref="UseTranslationAttribute"/> or
+        /// <see cref="UseGeneralTranslationAttribute"/>; the <c>UNSET</c> and <c>NULL</c> placeholders of a missing
+        /// value are words and use <see cref="PlaceholderTranslation"/>. While the values are untranslated, either by default or
+        /// through <see cref="NoTranslationAttribute"/>, only the values listed by <see cref="TranslateValuesAttribute"/> are
+        /// translated (see <see cref="SelectedValues"/>). Values with explicit attributes use exactly their keys; without
+        /// attributes boolean values only use the general table and enum values only their option-specific key
+        /// (see <see cref="SettingTranslation.Resolve(Attribute[], TranslationTarget, string, Type)"/>).
+        /// </remarks>
+        /// <param name="value">The option value, or null for a missing value.</param>
+        /// <param name="valueText">The untranslated display text of <paramref name="value"/>.</param>
+        /// <returns>
+        /// The localized text. When it is not translated or has no translation, the folded number of an option marked with
+        /// <see cref="FoldNumberAttribute"/>, or otherwise <paramref name="valueText"/>.
+        /// </returns>
+        protected string LocalizeValueText(object? value, string valueText)
+        {
+            if (value is null)
+            {
+                return PlaceholderTranslation.Localize(valueText);
+            }
+            string localizedText;
+            if (!ValueTranslation.IsTranslated || (_hasNumericValues && !ValueTranslation.IsExplicit))
+            {
+                localizedText = SelectedValues.Localize(value, valueText);
+            }
+            else
+            {
+                localizedText = ValueTranslation.Localize(valueText, _hasNumericValues);
+            }
+            return FoldUntranslatedNumber(value, valueText, localizedText);
+        }
+        /// <summary>
+        /// Replaces an untranslated numeric value text with its folded form when the option is marked with
+        /// <see cref="FoldNumberAttribute"/>.
+        /// </summary>
+        /// <remarks>
+        /// The translation lookup keeps using the unfolded <paramref name="valueText"/>, so a translated value is shown as
+        /// translated and only the raw number falls back to the folded text.
+        /// </remarks>
+        /// <param name="value">The option value.</param>
+        /// <param name="valueText">The untranslated display text of <paramref name="value"/>.</param>
+        /// <param name="localizedText">The result of the translation lookup for <paramref name="valueText"/>.</param>
+        /// <returns>The folded text when it applies; otherwise <paramref name="localizedText"/>.</returns>
+        private string FoldUntranslatedNumber(object value, string valueText, string localizedText)
+        {
+            if (!_foldsNumbers || !string.Equals(localizedText, valueText, StringComparison.Ordinal))
+            {
+                return localizedText;
+            }
+            return SettingNumberFolding.TryFold(value, out var foldedText) ? foldedText : localizedText;
+        }
+        private void InitTranslation()
+        {
+            var valueType = Nullable.GetUnderlyingType(_memberType) ?? _memberType;
+            _hasNumericValues = valueType.IsIntType() || valueType.IsFloatType();
+            _foldsNumbers = _hasNumericValues && GetCustomAttribute<FoldNumberAttribute>() != null;
+            ValueTranslation = SettingTranslation.Resolve(_attributes, TranslationTarget.OptionValue, Name, _memberType);
+            PlaceholderTranslation = SettingTranslation.ResolvePlaceholder(_attributes, Name);
+            SelectedValues = SettingValueSelection.Resolve(_attributes, Name, _memberType);
         }
         public virtual void Dispose()
         {
-            Localization.OnLanguageChanged -= OnLanguageChanged;
         }
         protected T? GetCustomAttribute<T>() where T : Attribute
         {
-            switch(ModeFlag)
+            foreach (var attribute in _attributes)
             {
-                case FLAG_FIELD_MODE:
-                    return FieldInfo.GetCustomAttribute<T>();
-                case FLAG_PROPERTY_MODE:
-                    return PropertyInfo.GetCustomAttribute<T>();
-                default:
-                    return null;
+                if (attribute is T result)
+                {
+                    return result;
+                }
             }
+            return null;
         }
         protected IEnumerable<T> GetCustomAttributes<T>() where T : Attribute
         {
-            switch (ModeFlag)
+            foreach (var attribute in _attributes)
             {
-                case FLAG_FIELD_MODE:
-                    return FieldInfo.GetCustomAttributes<T>();
-                case FLAG_PROPERTY_MODE:
-                    return PropertyInfo.GetCustomAttributes<T>();
-                default:
-                    return Array.Empty<T>();
+                if (attribute is T result)
+                {
+                    yield return result;
+                }
             }
         }
     }

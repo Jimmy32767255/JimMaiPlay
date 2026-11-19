@@ -7,6 +7,7 @@ using MajdataPlay.IO;
 using MajdataPlay.Numerics;
 using MajdataPlay.Scenes.Game.Notes.Controllers;
 using MajdataPlay.Scenes.Game.Notes.Slide;
+using MajdataPlay.Settings;
 using MajdataPlay.Utils;
 using System;
 using System.Collections.Generic;
@@ -163,19 +164,20 @@ namespace MajdataPlay.Scenes.Game.Notes.Behaviours
         /// </summary>
         [ReadOnlyField]
         [SerializeField]
-        protected readonly RentedList<GameObject> SlideBars = new();
+        protected readonly PooledList<GameObject> SlideBars = new();
         /// <summary>
         /// Arrow Renderers
         /// </summary>
         [ReadOnlyField]
         [SerializeField]
-        protected readonly RentedList<SpriteRenderer> SlideBarRenderers = new();
-        protected readonly RentedList<Transform> SlideBarTransforms = new();
+        protected readonly PooledList<SpriteRenderer> SlideBarRenderers = new();
+        protected readonly PooledList<Transform> SlideBarTransforms = new();
         /// <summary>
         /// Slide star
         /// </summary>
-        protected readonly Memory<GameObject?> Stars = Memory<GameObject?>.Empty;
-        protected readonly Memory<Transform> StarTransforms = Memory<Transform>.Empty;
+        protected readonly Memory<GameObject?> Stars = new GameObject?[3];
+        protected readonly Memory<SpriteRenderer?> StarRenderers = new SpriteRenderer?[3];
+        protected readonly Memory<Transform?> StarTransforms = new Transform?[3];
 
         protected SlideOK? SlideOK;
 
@@ -192,7 +194,11 @@ namespace MajdataPlay.Scenes.Game.Notes.Behaviours
         [ReadOnlyField, SerializeField]
         protected float FadeInMaxAlpha = 0.5f; // 淡入时最大不透明度
 
-
+        protected int JudgeQueueLength = 0;
+        protected int AutoplayLastAreaIndex = 0;
+        [ReadOnlyField]
+        [SerializeField]
+        protected float AutoplayProgress = 0f;
         protected float DJAutoplayProgress = 0;
 
         protected int LastHiddenSlideBarIndex = 0;
@@ -202,23 +208,158 @@ namespace MajdataPlay.Scenes.Game.Notes.Behaviours
         protected uint SlideBarFadeInFlag = 0;
 
         [ReadOnlyField, SerializeField]
-        int _multiple = 1;
+        private int _multiple = 1;
 
-        GameObject?[] _rentedArrayForStars;
-        Transform[] _rentedArrayForStarTransforms;
-        protected SlideBase()
-        {
-            _rentedArrayForStars = Pool<GameObject?>.RentArray(3, true);
-            _rentedArrayForStarTransforms = Pool<Transform>.RentArray(3, true);
+        private SlideArea?[] _lastTriggerAreas = new SlideArea?[3];
 
-            Stars = _rentedArrayForStars.AsMemory(0, 3);
-            StarTransforms = _rentedArrayForStarTransforms.AsMemory(0, 3);
-        }
-        ~SlideBase()
-        {
-            Dispose();
-        }
+        /// <summary>
+        /// The touches DJAuto simulated in its latest run, as centre, radius and pressed sensor bits, recorded only in
+        /// the Editor for the slide inspector.
+        /// </summary>
+        private readonly List<(Vector3 Position, float Radius, ulong PressedSensors)> _djAutoTouches = new();
+        /// <summary>The frame of the latest DJAuto run in <see cref="_djAutoTouches"/>, or -1 before the first run.</summary>
+        private int _djAutoTouchFrame = -1;
+
         public abstract void Init();
+        protected void MineCheck()
+        {
+            if (!IsMine || IsJudged)
+            {
+                return;
+            }
+            if (ConnectInfo.IsGroupPartEnd || !ConnectInfo.IsConnSlide)
+            {
+                if (GetTimeSpanToJudgeTiming() >= 0)
+                {
+                    JudgeResult = JudgeGrade.Perfect;
+                    IsJudged = true;
+                    HideAllBar();
+                }
+                else
+                {
+                    Autoplay();
+                }
+            }
+            else
+            {
+                if (GetRemainingTimeWithoutOffset() == 0)
+                {
+                    IsJudged = true;
+                    ClearAllJudgeQueue();
+                    HideAllBar();
+                }
+                else
+                {
+                    Autoplay();
+                }
+            }            
+        }
+        void ClearAllJudgeQueue()
+        {
+            for (var i = 0; i < JudgeQueues.Length; i++)
+            {
+                ref var queue = ref JudgeQueues[i];
+                queue = Memory<SlideArea>.Empty;
+            }
+        }
+        [Il2CppSetOption(Option.NullChecks, false)]
+        [Il2CppSetOption(Option.ArrayBoundsChecks, false)]
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        protected virtual SensorCheckResult SensorCheck()
+        {
+            if (AutoplayMode == AutoplayModeOption.Enable || !IsCheckable)
+            {
+                return default;
+            }
+            else if (IsEnded || !IsInited)
+            {
+                return default;
+            }
+            else if (IsFinished)
+            {
+                return default;
+            }
+            Array.Clear(_lastTriggerAreas, 0, _lastTriggerAreas.Length);
+            var isAnyAreaTriggered = false;
+            for (var x = 0; x < JudgeQueues.Length; x++)
+            {
+                ref var queueMemory = ref JudgeQueues[x];
+                if(queueMemory.IsEmpty)
+                {
+                    continue;
+                }
+                
+                for (; !queueMemory.IsEmpty;)
+                {
+                    var queue = queueMemory.Span;
+                    ref var first = ref queue[0];
+                    ref SlideArea second = ref Unsafe.NullRef<SlideArea>();
+                    var fAreas = first.IncludedAreas;
+
+                    if (queue.Length >= 2)
+                    {
+                        second = ref queue[1];
+                    }
+
+                    for (var i = 0; i < fAreas.Length; i++)
+                    {
+                        var area = fAreas[i];
+                        var sensorState = NoteManager.GetSensorStatusInThisFrame(area);
+                        first.Check(area, sensorState);
+                    }
+
+                    // Check the second area
+
+                    if (!Unsafe.IsNullRef(ref second) && (first.IsSkippable || first.On))
+                    {
+                        var sAreas = second.IncludedAreas;
+
+                        for (var i = 0; i < sAreas.Length; i++)
+                        {
+                            var area = sAreas[i];
+                            var sensorState = NoteManager.GetSensorStatusInThisFrame(area);
+                            second.Check(area, sensorState);
+                        }
+
+                        if (second.IsFinished)
+                        {
+                            queueMemory = queueMemory.Slice(2);
+                            _lastTriggerAreas[x] = second;
+                            isAnyAreaTriggered = true;
+                            continue;
+                        }
+                        else if (second.On)
+                        {
+                            queueMemory = queueMemory.Slice(1);
+                            _lastTriggerAreas[x] = second;
+                            isAnyAreaTriggered = true;
+                            continue;
+                        }
+                    }
+
+                    // Finally check the first area
+
+                    if (first.IsFinished)
+                    {
+                        queueMemory = queueMemory.Slice(1);
+                        _lastTriggerAreas[x] = first;
+                        isAnyAreaTriggered = true;
+                    }
+                    else if (first.On)
+                    {
+                        _lastTriggerAreas[x] = first;
+                        isAnyAreaTriggered = true;
+                    }
+                    break;
+                }
+            }
+            return new()
+            {
+                IsAnyAreaTriggered = isAnyAreaTriggered,
+                LastTriggerAreas = _lastTriggerAreas
+            };
+        }
+
         [Il2CppSetOption(Option.NullChecks, false)]
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         protected sealed override void Judge(float currentSec)
@@ -227,17 +368,17 @@ namespace MajdataPlay.Scenes.Game.Notes.Behaviours
             {
                 return;
             }
-            else if (_isJudged)
+            else if (IsJudged)
             {
                 return;
             }
             var stayTimeMSec = LastWaitTimeSec * 1000; // 停留时间
 
             // By Minepig
-            var diffSec = currentSec - JudgeTiming;
+            var diffSec = currentSec - JudgeTimingWithOffset;
             var isFast = diffSec < 0;
             var diffMSec = MathF.Abs(diffSec) * 1000;
-            _judgeDiff = diffSec * 1000;
+            JudgeDiff = diffSec * 1000;
             // input latency simulation
             //var ext = MathF.Max(0.05f, MathF.Min(stayTime / 4, 0.36666667f));
             var ext = MathF.Min(stayTimeMSec / 4, SLIDE_JUDGE_MAXIMUM_ALLOWED_EXT_LENGTH_MSEC);
@@ -258,8 +399,8 @@ namespace MajdataPlay.Scenes.Game.Notes.Behaviours
 
             //MajDebug.Log($"Slide diff : {MathF.Round(diffMSec, 2)} ms");
             ConvertJudgeGrade(ref result);
-            _judgeResult = result;
-            _isJudged = true;
+            JudgeResult = result;
+            IsJudged = true;
 
             var remainingStartTime = ThisFrameSec - ConnectInfo.StartTiming;
             if (remainingStartTime < 0)
@@ -270,6 +411,17 @@ namespace MajdataPlay.Scenes.Game.Notes.Behaviours
             {
                 LastWaitTimeSec = 0.05f;
             }
+            if (IsMine)
+            {
+                if (JudgeResult >= JudgeGrade.Perfect)
+                {
+                    JudgeResult = JudgeGrade.TooFast;
+                }
+                else
+                {
+                    JudgeResult = JudgeGrade.Miss;
+                }
+            }
         }
         [Il2CppSetOption(Option.NullChecks, false)]
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
@@ -279,13 +431,13 @@ namespace MajdataPlay.Scenes.Game.Notes.Behaviours
             {
                 return;
             }
-            else if (_isJudged)
+            else if (IsJudged)
             {
                 return;
             }
-            var diffSec = currentSec - JudgeTiming;
+            var diffSec = currentSec - JudgeTimingWithOffset;
             var isFast = diffSec < 0;
-            _judgeDiff = diffSec * 1000;
+            JudgeDiff = diffSec * 1000;
             var diffMSec = MathF.Abs(diffSec) * 1000;
             var judge = JudgeGrade.Miss;
             if (isFast)
@@ -316,13 +468,24 @@ namespace MajdataPlay.Scenes.Game.Notes.Behaviours
             }
 
             //MajDebug.Log($"Slide diff : {MathF.Round(diffMSec, 2)} ms");
-            _judgeResult = judge;
-            _isJudged = true;
+            JudgeResult = judge;
+            IsJudged = true;
 
             var remainingStartTime = ThisFrameSec - ConnectInfo.StartTiming;
             if (remainingStartTime < 0)
             {
                 LastWaitTimeSec = MathF.Abs(remainingStartTime) / 2;
+            }
+            if (IsMine)
+            {
+                if (JudgeResult >= JudgeGrade.Perfect)
+                {
+                    JudgeResult = JudgeGrade.TooFast;
+                }
+                else
+                {
+                    JudgeResult = JudgeGrade.Miss;
+                }
             }
         }
         [Il2CppSetOption(Option.NullChecks, false)]
@@ -336,12 +499,12 @@ namespace MajdataPlay.Scenes.Game.Notes.Behaviours
             {
                 return;
             }
-            ref var slideBarRef = ref MemoryMarshal.GetReference(SlideBars.AsSpan());
+            ref var slideBarRenderersRef = ref MemoryMarshal.GetReference(SlideBarRenderers.AsSpan());
             for (; LastHiddenSlideBarIndex <= endIndex; LastHiddenSlideBarIndex++)
             {
-                ref var slideBar = ref Unsafe.Add(ref slideBarRef, LastHiddenSlideBarIndex);
+                ref var slideBarRenderer = ref Unsafe.Add(ref slideBarRenderersRef, LastHiddenSlideBarIndex);
                 //_slideBarRenderers[i].forceRenderingOff = true;
-                slideBar.layer = MajEnv.HIDDEN_LAYER;
+                slideBarRenderer.enabled = false;
             }
         }
         [Il2CppSetOption(Option.NullChecks, false)]
@@ -355,7 +518,7 @@ namespace MajdataPlay.Scenes.Game.Notes.Behaviours
             }
 
             bool canPlay;
-            canPlay = NoteEffectManager.CheckJudgeDisplaySetting(MajInstances.Settings.Display.SlideJudgeType, result);
+            canPlay = NoteEffectManager.CheckJudgeDisplaySetting(MajEnv.UserSettings.Judge.SlideJudgeType, result);
 
             return canPlay;
         }
@@ -387,24 +550,22 @@ namespace MajdataPlay.Scenes.Game.Notes.Behaviours
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         void SetSlideBarRender(float alpha, Material? material, int setMode)
         {
-            ref var slideBarRef = ref MemoryMarshal.GetReference(SlideBars.AsSpan());
             ref var rendererRef = ref MemoryMarshal.GetReference(SlideBarRenderers.AsSpan());
             var count = SlideBars.Count;
             var newColor = new Color(1f, 1f, 1f, alpha);
             for (var i = 0; i < count; i++)
             {
                 ref var sr = ref Unsafe.Add(ref rendererRef, i);
-                ref var obj = ref Unsafe.Add(ref slideBarRef, i);
                 switch(setMode)
                 {
                     case SLIDE_BAR_MODE_SET_ALPHA:
                         if (alpha <= 0f)
                         {
-                            obj.layer = MajEnv.HIDDEN_LAYER;
+                            sr.enabled = false;
                         }
                         else
                         {
-                            obj.layer = MajEnv.DEFAULT_LAYER;
+                            sr.enabled = true;
                             sr.color = newColor;
                         }
                         break;
@@ -414,11 +575,11 @@ namespace MajdataPlay.Scenes.Game.Notes.Behaviours
                     case SLIDE_BAR_MODE_SET_ALPHA_AND_MATERIAL:
                         if (alpha <= 0f)
                         {
-                            obj.layer = MajEnv.HIDDEN_LAYER;
+                            sr.enabled = false;
                         }
                         else
                         {
-                            obj.layer = MajEnv.DEFAULT_LAYER;
+                            sr.enabled = true;
                             sr.color = newColor;
                         }
                         sr.sharedMaterial = material;
@@ -432,17 +593,12 @@ namespace MajdataPlay.Scenes.Game.Notes.Behaviours
         public sealed override void SetActive(bool state)
         {
             base.SetActive(state);
-            ref var slideBarRef = ref MemoryMarshal.GetReference(SlideBars.AsSpan());
-            var count = SlideBars.Count;
-            var layer = MajEnv.HIDDEN_LAYER;
-            if (state)
-            {
-                layer = MajEnv.DEFAULT_LAYER;
-            }
+            ref var slideBarRenderersRef = ref MemoryMarshal.GetReference(SlideBarRenderers.AsSpan());
+            var count = SlideBarRenderers.Count;
             for (var i = 0; i < count; i++)
             {
-                ref var slideBar = ref Unsafe.Add(ref slideBarRef, i);
-                slideBar.layer = layer;
+                ref var slideBarRenderer = ref Unsafe.Add(ref slideBarRenderersRef, i);
+                slideBarRenderer.enabled = state;
             }
             SetStarActive(state);
         }
@@ -451,31 +607,15 @@ namespace MajdataPlay.Scenes.Game.Notes.Behaviours
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         protected void SetStarActive(bool state)
         {
-            var stars = Stars.Span;
-            switch (state)
+            var starRenderers = StarRenderers.Span;
+            for (var i = 0; i < starRenderers.Length; i++)
             {
-                case true:
-                    for (var i = 0; i < stars.Length; i++)
-                    {
-                        var star = stars[i];
-                        if (star is null)
-                        {
-                            continue;
-                        }
-                        star.layer = MajEnv.DEFAULT_LAYER;
-                    }
-                    break;
-                case false:
-                    for (var i = 0; i < stars.Length; i++)
-                    {
-                        var star = stars[i];
-                        if (star is null)
-                        {
-                            continue;
-                        }
-                        star.layer = MajEnv.HIDDEN_LAYER;
-                    }
-                    break;
+                var starRenderer = starRenderers[i];
+                if (starRenderer is null)
+                {
+                    continue;
+                }
+                starRenderer.enabled = state;
             }
         }
         [Il2CppSetOption(Option.NullChecks, false)]
@@ -484,7 +624,7 @@ namespace MajdataPlay.Scenes.Game.Notes.Behaviours
         {
             if (!IsSoundPlayed)
             {
-                _audioEffMana.PlaySlideSound(IsBreak);
+                AudioEffMana.PlaySlideSound(IsBreak);
                 IsSoundPlayed = true;
             }
         }
@@ -494,30 +634,65 @@ namespace MajdataPlay.Scenes.Game.Notes.Behaviours
         {
             if (judgeResult.IsBreak && judgeResult.Grade == JudgeGrade.Perfect)
             {
-                _audioEffMana.PlayBreakSlideEndSound();
+                AudioEffMana.PlayBreakSlideEndSound();
             }
         }
         protected virtual void TooLateJudge()
         {
-            if (QueueRemaining == 1)
+            if (IsJudged)
             {
-                _judgeResult = JudgeGrade.LateGood;
+                End();
+                return;
+            }
+            else if (QueueRemaining == 1)
+            {
+                JudgeResult = JudgeGrade.LateGood;
             }
             else
             {
-                _judgeResult = JudgeGrade.Miss;
+                JudgeResult = JudgeGrade.Miss;
             }
-            ConvertJudgeGrade(ref _judgeResult);
-            _isJudged = true;
+            ConvertJudgeGrade(ref JudgeResult);
+            IsJudged = true;
+            End();
         }
         protected virtual void End()
         {
+            if (IsEnded)
+            {
+                return;
+            }
+            State = NoteStatus.End;
             if (Parent is not null && !Parent.IsEnded)
             {
                 Parent.End();
             }
 
             SetActive(false);
+
+            if (!ConnectInfo.IsConnSlide || ConnectInfo.IsGroupPartEnd)
+            {
+                ConvertJudgeGrade(ref JudgeResult);
+                if (!ModInfo.SubdivideSlideJudgeGrade)
+                {
+                    JudgeGradeCorrection(ref JudgeResult);
+                }
+                var result = new NoteJudgeResult()
+                {
+                    Grade = JudgeResult,
+                    Diff = JudgeDiff,
+                    IsEX = IsEX,
+                    IsBreak = IsBreak
+                };
+                // 只有组内最后一个Slide完成 才会显示判定条并增加总数
+                ObjectCounter.ReportResult(this, result, Multiple);
+                if (PlaySlideOK(result))
+                {
+                    SlideOK.PlayResult(result);
+                }
+
+                PlayJudgeSFX(result);
+            }
         }
         /// <summary>
         /// Connection Slide
@@ -539,6 +714,134 @@ namespace MajdataPlay.Scenes.Game.Notes.Behaviours
                 JudgeQueues[i] = emptyQueue; 
             }
         }
+        /// <summary>
+        /// Captures the judge queues and the protected judgment state of the slide for the slide inspector.
+        /// </summary>
+        /// <returns>A new snapshot; capturing allocates, so only editor tools call this.</returns>
+        internal SlideDebugInfo CaptureDebugInfo()
+        {
+            var queues = new List<SlideDebugInfo.QueueInfo>(JudgeQueues.Length);
+            for (var i = 0; i < JudgeQueues.Length; i++)
+            {
+                var remaining = JudgeQueues[i];
+                var initial = GetInitialJudgeQueue(i);
+                if (remaining.Length > initial.Length)
+                {
+                    // 判定队列被直接替换过，只能把剩余的部分当作完整的队列
+                    initial = remaining;
+                }
+                if (initial.IsEmpty)
+                {
+                    continue;
+                }
+                // 判定队列只会从头部切掉已经通过的判定区，所以剩余部分总是完整队列的后缀
+                queues.Add(new SlideDebugInfo.QueueInfo(GetJudgeQueueName(i),
+                                                        CaptureAreas(initial.Span),
+                                                        initial.Length - remaining.Length));
+            }
+            var arrowPositions = new Vector3[SlideBarTransforms.Count];
+            for (var i = 0; i < arrowPositions.Length; i++)
+            {
+                var arrowTransform = SlideBarTransforms[i];
+                if (arrowTransform != null)
+                {
+                    arrowPositions[i] = arrowTransform.position;
+                }
+            }
+            var (tableName, tableConst, tableClassicConst) = GetJudgeTableInfo();
+            // 星星的移动不含判定偏移，所以用不含偏移的判定时机求正解帧时星星的位置
+            var hasJudgeTiming = !ConnectInfo.IsConnSlide || ConnectInfo.IsGroupPartEnd;
+            var judgeFrameProgress = Length <= 0f ? 1f : Mathf.Clamp01((JudgeTiming - StartTiming) / Length);
+
+            return new SlideDebugInfo()
+            {
+                TableName = tableName,
+                TableConst = tableConst,
+                TableClassicConst = tableClassicConst,
+                IsJudged = IsJudged,
+                JudgeResult = JudgeResult,
+                JudgeDiffMSec = JudgeDiff,
+                LastWaitTimeSec = LastWaitTimeSec,
+                HasJudgeTiming = hasJudgeTiming,
+                JudgeFrameProgress = judgeFrameProgress,
+                JudgeFrameStarPositions = hasJudgeTiming ? CaptureStarPositionsAt(judgeFrameProgress) : Array.Empty<Vector3>(),
+                IsCheckable = IsCheckable,
+                ArrowPositions = arrowPositions,
+                HiddenArrowCount = LastHiddenSlideBarIndex,
+                Queues = queues.ToArray(),
+                AutoplayMode = AutoplayMode,
+                IsDJAutoEnabled = AutoplayMode is AutoplayModeOption.DJAuto_TouchPanel_First or AutoplayModeOption.DJAuto_ButtonRing_First,
+                DJAutoplayProgress = DJAutoplayProgress,
+                DJAutoTouchFrame = _djAutoTouchFrame,
+                DJAutoTouches = CaptureDJAutoTouches()
+            };
+        }
+        /// <summary>Gets a judge queue as it was built, before the player passed any of its areas.</summary>
+        /// <param name="index">The index of the queue in <see cref="JudgeQueues"/>.</param>
+        /// <returns>The whole queue; the base implementation only knows the areas that are still waiting.</returns>
+        private protected virtual Memory<SlideArea> GetInitialJudgeQueue(int index)
+        {
+            return JudgeQueues[index];
+        }
+        /// <summary>Gets the name the slide inspector shows for a judge queue.</summary>
+        /// <param name="index">The index of the queue in <see cref="JudgeQueues"/>.</param>
+        /// <returns>The queue name.</returns>
+        private protected virtual string GetJudgeQueueName(int index)
+        {
+            return index == 0 ? "Judge queue" : $"Judge queue {index}";
+        }
+        /// <summary>Gets the name and the judgment constants of the judge table, for the slide inspector.</summary>
+        /// <returns>The table name, empty when unknown or generated, and the modern and classic constants.</returns>
+        private protected virtual (string Name, float Const, float ClassicConst) GetJudgeTableInfo()
+        {
+            return (string.Empty, 0f, 0f);
+        }
+        /// <summary>
+        /// Gets where the stars are once they have moved a share of the path, so that the slide inspector can preview
+        /// the judge frame of another slide constant.
+        /// </summary>
+        /// <param name="progress">How far along the path; values outside 0 to 1 are clamped.</param>
+        /// <returns>The world position of each star, or an empty array before the path is built.</returns>
+        internal Vector3[] CaptureStarPositionsAt(float progress)
+        {
+            return GetStarPositionsAt(Mathf.Clamp01(progress));
+        }
+        /// <summary>Gets where the stars are once they have moved a share of the path, for the slide inspector.</summary>
+        /// <param name="progress">How far along the path, from 0 to 1.</param>
+        /// <returns>The world position of each star; the base implementation knows no path and returns an empty array.</returns>
+        private protected virtual Vector3[] GetStarPositionsAt(float progress)
+        {
+            return Array.Empty<Vector3>();
+        }
+        /// <summary>Captures the areas of a judge queue together with the state of their sensors in this frame.</summary>
+        /// <param name="areas">The areas of the queue as it was built.</param>
+        /// <returns>The captured areas, in judgment order.</returns>
+        private SlideDebugInfo.AreaInfo[] CaptureAreas(ReadOnlySpan<SlideArea> areas)
+        {
+            var result = new SlideDebugInfo.AreaInfo[areas.Length];
+            for (var i = 0; i < areas.Length; i++)
+            {
+                var area = areas[i];
+                var sensors = area.IncludedAreas.ToArray();
+                var statuses = NoteManager is null ? Array.Empty<SwitchStatus>() : new SwitchStatus[sensors.Length];
+                for (var j = 0; j < statuses.Length; j++)
+                {
+                    statuses[j] = NoteManager!.GetSensorStatusInThisFrame(sensors[j]);
+                }
+                result[i] = new SlideDebugInfo.AreaInfo()
+                {
+                    Sensors = sensors,
+                    SensorStatuses = statuses,
+                    Policy = area.Policy,
+                    IsSkippable = area.IsSkippable,
+                    IsOn = area.On,
+                    IsFinished = area.IsFinished,
+                    ArrowProgressWhenOn = area.ArrowProgressWhenOn,
+                    ArrowProgressWhenFinished = area.ArrowProgressWhenFinished
+                };
+            }
+            return result;
+        }
         [Il2CppSetOption(Option.NullChecks, false)]
         [Il2CppSetOption(Option.ArrayBoundsChecks, false)]
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
@@ -549,11 +852,15 @@ namespace MajdataPlay.Scenes.Game.Notes.Behaviours
                 return;
             }
             SetStarActive(false);
-            foreach (ref var star in Stars.Span)
+            var stars = Stars.Span;
+            var starTransforms = StarTransforms.Span;
+            var starRenderers = StarRenderers.Span;
+            for (var i = 0; i < 3; i++)
             {
-                star = null;
+                stars[i] = null;
+                starTransforms[i] = null;
+                starRenderers[i] = null;
             }
-            //GameObjectHelper.Destroy(ref _stars);
         }
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         protected void SlideBarFadeIn()
@@ -599,10 +906,18 @@ namespace MajdataPlay.Scenes.Game.Notes.Behaviours
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         protected void SlideDJAutoSimulateSensorPress(Vector3 cubeRay, float rad)
         {
+            var positionSamples = InputManager.TouchPanelPositionSamples;
+            if (positionSamples.IsEmpty)
+            {
+                // 触摸位置采样表尚未生成，没有可以读取的传感器
+                RecordDJAutoTouch(cubeRay, rad, 0UL);
+                return;
+            }
             var p = 0UL;
+            var pressedSensors = 0UL;
             unsafe
             {
-                fixed (ulong* samplePtr = &InputManager.TouchPanelPositionSamples.GetPinnableReference())
+                fixed (ulong* samplePtr = &positionSamples.GetPinnableReference())
                 fixed (Vector4* circleSamplesPtr = &InputManager.UnitCircle.GetPinnableReference())
                 {
                     MobileTouchPanelHelper.PositionHandle(cubeRay,
@@ -622,25 +937,72 @@ namespace MajdataPlay.Scenes.Game.Notes.Behaviours
                 {
                     if ((p & (1UL << (i + 12))) != 0)
                     {
-                        _noteManager.SimulateSensorPress((SensorArea)i);
+                        NoteManager.SimulateSensorPress((SensorArea)i);
+                        pressedSensors |= 1UL << i;
                     }
                 }
                 if ((p & (0b11 << (16 + 12))) != 0)
                 {
-                    _noteManager.SimulateSensorPress(SensorArea.C);
+                    NoteManager.SimulateSensorPress(SensorArea.C);
+                    pressedSensors |= 1UL << (int)SensorArea.C;
                 }
                 for (var i = 18; i < 34; i++)
                 {
                     if ((p & (1UL << (i + 12))) != 0)
                     {
-                        _noteManager.SimulateSensorPress((SensorArea)(i - 1));
+                        NoteManager.SimulateSensorPress((SensorArea)(i - 1));
+                        pressedSensors |= 1UL << (i - 1);
                     }
                 }
             }
+            RecordDJAutoTouch(cubeRay, rad, pressedSensors);
         }
-        protected virtual void OnDestroy()
+        /// <summary>
+        /// Starts a new DJAuto run in the touch record of the slide inspector, dropping the touches of the previous run.
+        /// Only the Editor records touches.
+        /// </summary>
+        [System.Diagnostics.Conditional("UNITY_EDITOR")]
+        private protected void BeginDJAutoTouchRecord()
         {
-            Dispose();
+            _djAutoTouches.Clear();
+            _djAutoTouchFrame = Time.frameCount;
+        }
+        /// <summary>Adds a touch simulated by DJAuto to the touch record of the slide inspector. Only the Editor records touches.</summary>
+        /// <param name="position">The world position of the touch centre.</param>
+        /// <param name="radius">The touch radius passed to the touch panel sampling.</param>
+        /// <param name="pressedSensors">The pressed sensors, one bit for each <see cref="SensorArea"/> value.</param>
+        [System.Diagnostics.Conditional("UNITY_EDITOR")]
+        private void RecordDJAutoTouch(Vector3 position, float radius, ulong pressedSensors)
+        {
+            _djAutoTouches.Add((position, radius, pressedSensors));
+        }
+        /// <summary>Captures the touches DJAuto simulated in its latest run.</summary>
+        /// <returns>The touches in the order DJAuto pressed them.</returns>
+        private SlideDebugInfo.DJAutoTouchInfo[] CaptureDJAutoTouches()
+        {
+            var result = new SlideDebugInfo.DJAutoTouchInfo[_djAutoTouches.Count];
+            for (var i = 0; i < result.Length; i++)
+            {
+                var (position, radius, pressedSensors) = _djAutoTouches[i];
+                var sensors = new List<SensorArea>();
+                for (var sensor = SensorArea.A1; sensor <= SensorArea.E8; sensor++)
+                {
+                    if ((pressedSensors & (1UL << (int)sensor)) != 0)
+                    {
+                        sensors.Add(sensor);
+                    }
+                }
+                // 采样按 FINGER_RADIUS_SEGMENT_LENGTH 的整数倍向外取圆环，最外圈会超出给定半径
+                var ringCount = Mathf.Ceil(radius / InputManager.FINGER_RADIUS_SEGMENT_LENGTH);
+                result[i] = new SlideDebugInfo.DJAutoTouchInfo()
+                {
+                    Position = position,
+                    Radius = radius,
+                    SampledRadius = ringCount * InputManager.FINGER_RADIUS_SEGMENT_LENGTH,
+                    Sensors = sensors.ToArray()
+                };
+            }
+            return result;
         }
         protected void JudgeGradeCorrection(ref JudgeGrade result)
         {
@@ -660,22 +1022,7 @@ namespace MajdataPlay.Scenes.Game.Notes.Behaviours
         protected sealed override float GetRemainingTimeWithoutOffset() => MathF.Max(ArriveTiming - ThisFrameSec, 0);
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         protected sealed override float GetTimeSpanToArriveTiming() => ThisFrameSec - ArriveTiming;
-        void Dispose()
-        {
-            if(_rentedArrayForStars.Length != 0)
-            {
-                Pool<GameObject?>.ReturnArray(_rentedArrayForStars, true);
-                _rentedArrayForStars = Array.Empty<GameObject?>();
-            }
-            if(_rentedArrayForStarTransforms.Length != 0)
-            {
-                Pool<Transform>.ReturnArray(_rentedArrayForStarTransforms, true);
-                _rentedArrayForStarTransforms = Array.Empty<Transform>();
-            }
-            SlideBars.Dispose();
-            SlideBarTransforms.Dispose();
-            SlideBarRenderers.Dispose();
-        }
+
         [ReadOnlyField, SerializeField]
         float _startTiming;
         [ReadOnlyField, SerializeField]
@@ -686,5 +1033,11 @@ namespace MajdataPlay.Scenes.Game.Notes.Behaviours
         string _slideType = string.Empty;
         [ReadOnlyField, SerializeField]
         float _slideLength = 0f;
+
+        protected readonly ref struct SensorCheckResult
+        {
+            public bool IsAnyAreaTriggered { get; init; }
+            public ReadOnlySpan<SlideArea?> LastTriggerAreas { get; init; }
+        }
     }
 }

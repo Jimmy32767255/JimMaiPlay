@@ -1,274 +1,389 @@
-﻿using Cysharp.Threading.Tasks;
+using Cysharp.Threading.Tasks;
+using MajdataPlay.Buffers;
+
+using MajdataPlay.Diagnostics;
 using MajdataPlay.Drawing;
+using MajdataPlay.IO.Storage;
+using MajdataPlay.Rendering;
 using System;
 using System.Collections.Generic;
 using System.IO;
-using System.Linq;
-using System.Text;
+
 using System.Threading;
-using System.Threading.Tasks;
-using Unity.VisualScripting.Antlr3.Runtime;
+using Unity.Burst;
+using Unity.Collections;
+using Unity.Collections.LowLevel.Unsafe;
+using Unity.Jobs;
+using Unity.Mathematics;
+
+using Unity.VectorGraphics;
 using UnityEngine;
 #nullable enable
 namespace MajdataPlay.Scenes.Game.Notes.Skins
 {
     public class CustomSkin
     {
-        public string Name { get; private set; }
+        public string Name { get; }
         public bool IsLoaded { get; private set; }
         public bool IsOutlineAvailable { get; private set; } = false;
-        public Sprite SubDisplay { get; private set; }
 
-        public Sprite Tap { get; private set; }
-        public Sprite Tap_Each { get; private set; }
-        public Sprite Tap_Break { get; private set; }
-        public Sprite Tap_Ex { get; private set; }
+        // --- 属性保持完全不变 ---
+        public Sprite? SubDisplay { get; private set; }
+        public Sprite? Tap { get; private set; }
+        public Sprite? Tap_Each { get; private set; }
+        public Sprite? Tap_Break { get; private set; }
+        public Sprite? Tap_Ex { get; private set; }
+        public Sprite? Tap_Mine { get; private set; }
+        public Sprite? Tap_Break_Mine { get; private set; }
 
-        public Sprite Slide { get; private set; }
-        public Sprite Slide_Each { get; private set; }
-        public Sprite Slide_Break { get; private set; }
-        public Sprite[] Wifi { get; private set; } = new Sprite[11];
-        public Sprite[] Wifi_Each { get; private set; } = new Sprite[11];
-        public Sprite[] Wifi_Break { get; private set; } = new Sprite[11];
+        public Sprite? Slide { get; private set; }
+        public Sprite? Slide_Each { get; private set; }
+        public Sprite? Slide_Break { get; private set; }
+        public Sprite? Slide_Mine { get; private set; }
+        public Sprite? Slide_Break_Mine { get; private set; }
+        public Sprite?[] Wifi { get; private set; } = new Sprite[11];
+        public Sprite?[] Wifi_Each { get; private set; } = new Sprite[11];
+        public Sprite?[] Wifi_Break { get; private set; } = new Sprite[11];
+        public Sprite?[] Wifi_Mine { get; private set; } = new Sprite[11];
+        public Sprite?[] Wifi_Break_Mine { get; private set; } = new Sprite[11];
 
-        public Sprite Star { get; private set; }
-        public Sprite Star_Double { get; private set; }
-        public Sprite Star_Each { get; private set; }
-        public Sprite Star_Each_Double { get; private set; }
-        public Sprite Star_Break { get; private set; }
-        public Sprite Star_Break_Double { get; private set; }
-        public Sprite Star_Ex { get; private set; }
-        public Sprite Star_Ex_Double { get; private set; }
+        public Sprite? Star { get; private set; }
+        public Sprite? Star_Double { get; private set; }
+        public Sprite? Star_Each { get; private set; }
+        public Sprite? Star_Each_Double { get; private set; }
+        public Sprite? Star_Break { get; private set; }
+        public Sprite? Star_Break_Double { get; private set; }
+        public Sprite? Star_Ex { get; private set; }
+        public Sprite? Star_Ex_Double { get; private set; }
+        public Sprite? Star_Mine { get; private set; }
+        public Sprite? Star_Double_Mine { get; private set; }
+        public Sprite? Star_Break_Mine { get; private set; }
+        public Sprite? Star_Break_Double_Mine { get; private set; }
 
-        public Sprite Hold { get; private set; }
-        public Sprite Hold_On { get; private set; }
-        public Sprite Hold_Off { get; private set; }
-        public Sprite Hold_Each { get; private set; }
-        public Sprite Hold_Each_On { get; private set; }
-        public Sprite Hold_Ex { get; private set; }
-        public Sprite Hold_Break { get; private set; }
-        public Sprite Hold_Break_On { get; private set; }
+        public Sprite? Hold { get; private set; }
+        public Sprite? Hold_On { get; private set; }
+        public Sprite? Hold_Off { get; private set; }
+        public Sprite? Hold_Each { get; private set; }
+        public Sprite? Hold_Each_On { get; private set; }
+        public Sprite? Hold_Ex { get; private set; }
+        public Sprite? Hold_Mine { get; private set; }
+        public Sprite? Hold_Mine_On { get; private set; }
+        public Sprite? Hold_Break_Mine { get; private set; }
+        public Sprite? Hold_Break_Mine_On { get; private set; }
+        public Sprite? Hold_Break { get; private set; }
+        public Sprite? Hold_Break_On { get; private set; }
 
-        public Sprite[] Just { get; private set; } = new Sprite[60];
+        public Sprite?[] Just { get; private set; } = new Sprite[60];
 
-        public Sprite CriticalPerfect_Shine { get; private set; }
-        public Sprite Perfect_Shine { get; private set; }
-        public Sprite Break_2600_Shine { get; private set; }
+        public Sprite? CriticalPerfect_Shine { get; private set; }
+        public Sprite? Perfect_Shine { get; private set; }
+        public Sprite? Break_2600_Shine { get; private set; }
 
-        public Sprite CriticalPerfect { get; private set; }
-        public Sprite Perfect { get; private set; }
-        public Sprite Great { get; private set; }
-        public Sprite Good { get; private set; }
-        public Sprite Miss { get; private set; }
+        public Sprite? CriticalPerfect { get; private set; }
+        public Sprite? Perfect { get; private set; }
+        public Sprite? Great { get; private set; }
+        public Sprite? Good { get; private set; }
+        public Sprite? Miss { get; private set; }
 
-        public Sprite Break_2600 { get; private set; }
-        public Sprite Break_2550 { get; private set; }
-        public Sprite Break_2500 { get; private set; }
-        public Sprite Break_2000 { get; private set; }
-        public Sprite Break_1500 { get; private set; }
-        public Sprite Break_1250 { get; private set; }
-        public Sprite Break_1000 { get; private set; }
-        public Sprite Break_0 { get; private set; }
-        public Sprite Fast { get; private set; }
-        public Sprite Late { get; private set; }
+        public Sprite? Break_2600 { get; private set; }
+        public Sprite? Break_2550 { get; private set; }
+        public Sprite? Break_2500 { get; private set; }
+        public Sprite? Break_2000 { get; private set; }
+        public Sprite? Break_1500 { get; private set; }
+        public Sprite? Break_1250 { get; private set; }
+        public Sprite? Break_1000 { get; private set; }
+        public Sprite? Break_0 { get; private set; }
+        public Sprite? Fast { get; private set; }
+        public Sprite? Late { get; private set; }
 
-        public Sprite? CriticalPerfect_Fast { get; private set; } = null;
-        public Sprite? Perfect_Fast { get; private set; } = null;
-        public Sprite? Great_Fast { get; private set; } = null;
-        public Sprite? Good_Fast { get; private set; } = null;
+        public Sprite? CriticalPerfect_Fast { get; private set; }
+        public Sprite? Perfect_Fast { get; private set; }
+        public Sprite? Great_Fast { get; private set; }
+        public Sprite? Good_Fast { get; private set; }
 
-        public Sprite? Break_2600_Fast { get; private set; } = null;
-        public Sprite? Break_2550_Fast { get; private set; } = null;
-        public Sprite? Break_2500_Fast { get; private set; } = null;
-        public Sprite? Break_2000_Fast { get; private set; } = null;
-        public Sprite? Break_1500_Fast { get; private set; } = null;
-        public Sprite? Break_1250_Fast { get; private set; } = null;
-        public Sprite? Break_1000_Fast { get; private set; } = null;
+        public Sprite? Break_2600_Fast { get; private set; }
+        public Sprite? Break_2550_Fast { get; private set; }
+        public Sprite? Break_2500_Fast { get; private set; }
+        public Sprite? Break_2000_Fast { get; private set; }
+        public Sprite? Break_1500_Fast { get; private set; }
+        public Sprite? Break_1250_Fast { get; private set; }
+        public Sprite? Break_1000_Fast { get; private set; }
 
-        public Sprite? CriticalPerfect_Late { get; private set; } = null;
-        public Sprite? Perfect_Late { get; private set; } = null;
-        public Sprite? Great_Late { get; private set; } = null;
-        public Sprite? Good_Late { get; private set; } = null;
+        public Sprite? CriticalPerfect_Late { get; private set; }
+        public Sprite? Perfect_Late { get; private set; }
+        public Sprite? Great_Late { get; private set; }
+        public Sprite? Good_Late { get; private set; }
 
-        public Sprite? Break_2600_Late { get; private set; } = null;
-        public Sprite? Break_2550_Late { get; private set; } = null;
-        public Sprite? Break_2500_Late { get; private set; } = null;
-        public Sprite? Break_2000_Late { get; private set; } = null;
-        public Sprite? Break_1500_Late { get; private set; } = null;
-        public Sprite? Break_1250_Late { get; private set; } = null;
-        public Sprite? Break_1000_Late { get; private set; } = null;
+        public Sprite? Break_2600_Late { get; private set; }
+        public Sprite? Break_2550_Late { get; private set; }
+        public Sprite? Break_2500_Late { get; private set; }
+        public Sprite? Break_2000_Late { get; private set; }
+        public Sprite? Break_1500_Late { get; private set; }
+        public Sprite? Break_1250_Late { get; private set; }
+        public Sprite? Break_1000_Late { get; private set; }
 
-        public Sprite Touch { get; private set; }
-        public Sprite Touch_Each { get; private set; }
-        public Sprite Touch_Break { get; private set; }
-        public Sprite TouchPoint { get; private set; }
-        public Sprite TouchPoint_Each { get; private set; }
-        public Sprite TouchPoint_Break { get; private set; }
-        public Sprite TouchJust { get; private set; }
-        public Sprite[] TouchBorder { get; private set; } = new Sprite[2];
-        public Sprite[] TouchBorder_Each { get; private set; } = new Sprite[2];
-        public Sprite[] TouchBorder_Break { get; private set; } = new Sprite[2];
+        public Sprite? Touch { get; private set; }
+        public Sprite? Touch_Each { get; private set; }
+        public Sprite? Touch_Break { get; private set; }
+        public Sprite? Touch_Mine { get; private set; }
+        public Sprite? Touch_Break_Mine { get; private set; }
+        public Sprite? TouchPoint { get; private set; }
+        public Sprite? TouchPoint_Each { get; private set; }
+        public Sprite? TouchPoint_Break { get; private set; }
+        public Sprite? TouchPoint_Mine { get; private set; }
+        public Sprite? TouchPoint_Break_Mine { get; private set; }
+        public Sprite? TouchJust { get; private set; }
 
-        public Sprite[] TouchHold { get; private set; } = new Sprite[5];
-        public Sprite[] TouchHold_Break { get; private set; } = new Sprite[5];
-        public Sprite TouchHold_Off { get; private set; }
+        public Sprite?[] TouchBorder { get; private set; } = new Sprite[2];
+        public Sprite?[] TouchBorder_Each { get; private set; } = new Sprite[2];
+        public Sprite?[] TouchBorder_Break { get; private set; } = new Sprite[2];
+        public Sprite?[] TouchBorder_Mine { get; private set; } = new Sprite[2];
+        public Sprite?[] TouchBorder_Break_Mine { get; private set; } = new Sprite[2];
 
-        public Sprite LoadingSplash { get; private set; }
+        public Sprite?[] TouchHold { get; private set; } = new Sprite[5];
+        public Sprite?[] TouchHold_Break { get; private set; } = new Sprite[5];
+        public Sprite?[] TouchHold_Mine { get; private set; } = new Sprite[5];
+        public Sprite?[] TouchHold_Break_Mine { get; private set; } = new Sprite[5];
+        public Sprite? TouchHold_Off { get; private set; }
 
-        public Sprite Outline { get; private set; }
+        public Sprite? LoadingSplash { get; private set; }
+        public Sprite? Outline { get; private set; }
 
-        public Sprite TapLine_Normal { get; private set; }
-        public Sprite TapLine_Each { get; private set; }
-        public Sprite TapLine_Slide { get; private set; }
-        public Sprite TapLine_Break { get; private set; }
+        public Sprite? TapLine_Normal { get; private set; }
+        public Sprite? TapLine_Each { get; private set; }
+        public Sprite? TapLine_Slide { get; private set; }
+        public Sprite? TapLine_Break { get; private set; }
+        public Sprite? TapLine_Mine { get; private set; }
 
-        public Sprite[] EachLines { get; private set; } = new Sprite[4];
-        public Sprite HoldEndPoint_Normal { get; private set; }
-        public Sprite HoldEndPoint_Each { get; private set; }
-        public Sprite HoldEndPoint_Break { get; private set; }
+        public Sprite?[] EachLines { get; private set; } = new Sprite[4];
+        public Sprite? HoldEndPoint_Normal { get; private set; }
+        public Sprite? HoldEndPoint_Each { get; private set; }
+        public Sprite? HoldEndPoint_Break { get; private set; }
+        public Sprite? HoldEndPoint_Mine { get; private set; }
+        // --- 属性定义结束 ---
 
         public static readonly CustomSkin Empty;
-        static readonly Sprite _dummySprite = Sprite.Create(new Texture2D(0, 0), new Rect(0, 0, 0, 0), new Vector2(0.5f, 0.5f));
+        static readonly Sprite _dummySprite = SpriteLoader.EmptySprite;
 
         bool _canUnload = true;
-        readonly string _path;
+        /// <summary>The skin collection directory, or null for the built-in empty skin.</summary>
+        readonly StorageDirectory? _directory;
         readonly SemaphoreSlim _loadSyncLock = new(1, 1);
+        private Texture2D? _atlasTexture;
+
+        // Source-pixel grid; values below 1 disable snapping.
+        private const float SpriteOutlineSnap = 1f;
+        // Normalized detail: 0 = simplified, 1 = pixel-exact boundary.
+        private const float SpriteOutlineDetail = 0.5f;
+        // Alpha <= this threshold is excluded from the generated mesh.
+        private const byte SpriteAlphaTolerance = 30;
 
         static CustomSkin()
         {
-            var skin = new CustomSkin
+            var skin = new CustomSkin("NotAvailable")
             {
-                Name = "NotAvailable",
                 IsLoaded = true,
                 IsOutlineAvailable = false,
-
-                SubDisplay = _dummySprite,
-
-                Tap = _dummySprite,
-                Tap_Each = _dummySprite,
-                Tap_Break = _dummySprite,
-                Tap_Ex = _dummySprite,
-
-                Slide = _dummySprite,
-                Slide_Each = _dummySprite,
-                Slide_Break = _dummySprite,
-
-                Star = _dummySprite,
-                Star_Double = _dummySprite,
-                Star_Each = _dummySprite,
-                Star_Each_Double = _dummySprite,
-                Star_Break = _dummySprite,
-                Star_Break_Double = _dummySprite,
-                Star_Ex = _dummySprite,
-                Star_Ex_Double = _dummySprite,
-
-                Hold = _dummySprite,
-                Hold_On = _dummySprite,
-                Hold_Off = _dummySprite,
-                Hold_Each = _dummySprite,
-                Hold_Each_On = _dummySprite,
-                Hold_Ex = _dummySprite,
-                Hold_Break = _dummySprite,
-                Hold_Break_On = _dummySprite,
-
-                CriticalPerfect_Shine = _dummySprite,
-                Perfect_Shine = _dummySprite,
-                Break_2600_Shine = _dummySprite,
-
-                CriticalPerfect = _dummySprite,
-                Perfect = _dummySprite,
-                Great = _dummySprite,
-                Good = _dummySprite,
-                Miss = _dummySprite,
-
-                Break_2600 = _dummySprite,
-                Break_2550 = _dummySprite,
-                Break_2500 = _dummySprite,
-                Break_2000 = _dummySprite,
-                Break_1500 = _dummySprite,
-                Break_1250 = _dummySprite,
-                Break_1000 = _dummySprite,
-                Break_0 = _dummySprite,
-
-                Fast = _dummySprite,
-                Late = _dummySprite,
-
-                CriticalPerfect_Fast = _dummySprite,
-                Perfect_Fast = _dummySprite,
-                Great_Fast = _dummySprite,
-                Good_Fast = _dummySprite,
-
-                Break_2600_Fast = _dummySprite,
-                Break_2550_Fast = _dummySprite,
-                Break_2500_Fast = _dummySprite,
-                Break_2000_Fast = _dummySprite,
-                Break_1500_Fast = _dummySprite,
-                Break_1250_Fast = _dummySprite,
-                Break_1000_Fast = _dummySprite,
-
-                CriticalPerfect_Late = _dummySprite,
-                Perfect_Late = _dummySprite,
-                Great_Late = _dummySprite,
-                Good_Late = _dummySprite,
-
-                Break_2600_Late = _dummySprite,
-                Break_2550_Late = _dummySprite,
-                Break_2500_Late = _dummySprite,
-                Break_2000_Late = _dummySprite,
-                Break_1500_Late = _dummySprite,
-                Break_1250_Late = _dummySprite,
-                Break_1000_Late = _dummySprite,
-
-                Touch = _dummySprite,
-                Touch_Each = _dummySprite,
-                Touch_Break = _dummySprite,
-                TouchPoint = _dummySprite,
-                TouchPoint_Each = _dummySprite,
-                TouchPoint_Break = _dummySprite,
-                TouchJust = _dummySprite,
-
-                TouchHold_Off = _dummySprite,
-
-                LoadingSplash = _dummySprite,
-
-                Outline = _dummySprite,
-
-                TapLine_Normal = _dummySprite,
-                TapLine_Each = _dummySprite,
-                TapLine_Slide = _dummySprite,
-                TapLine_Break = _dummySprite,
-
-                HoldEndPoint_Normal = _dummySprite,
-                HoldEndPoint_Each = _dummySprite,
-                HoldEndPoint_Break = _dummySprite,
+                _canUnload = false,
             };
 
-            Array.Fill(skin.Wifi, _dummySprite);
-            Array.Fill(skin.Wifi_Each, _dummySprite);
-            Array.Fill(skin.Wifi_Break, _dummySprite);
-            Array.Fill(skin.Just, _dummySprite);
-
-            Array.Fill(skin.TouchBorder, _dummySprite);
-            Array.Fill(skin.TouchBorder_Each, _dummySprite);
-            Array.Fill(skin.TouchBorder_Break, _dummySprite);
-
-            Array.Fill(skin.TouchHold, _dummySprite);
-            Array.Fill(skin.TouchHold_Break, _dummySprite);
-
-            Array.Fill(skin.EachLines, _dummySprite);
-            skin._canUnload = false;
             Empty = skin;
         }
-        CustomSkin()
+
+        CustomSkin(string name)
         {
-            
+            Name = name;
+            SubDisplay = _dummySprite;
+            Tap = _dummySprite;
+            Tap_Each = _dummySprite;
+            Tap_Break = _dummySprite;
+            Tap_Ex = _dummySprite;
+
+            Slide = _dummySprite;
+            Slide_Each = _dummySprite;
+            Slide_Break = _dummySprite;
+
+            Star = _dummySprite;
+            Star_Double = _dummySprite;
+            Star_Each = _dummySprite;
+            Star_Each_Double = _dummySprite;
+            Star_Break = _dummySprite;
+            Star_Break_Double = _dummySprite;
+            Star_Ex = _dummySprite;
+            Star_Ex_Double = _dummySprite;
+
+            Hold = _dummySprite;
+            Hold_On = _dummySprite;
+            Hold_Off = _dummySprite;
+            Hold_Each = _dummySprite;
+            Hold_Each_On = _dummySprite;
+            Hold_Ex = _dummySprite;
+            Hold_Break = _dummySprite;
+            Hold_Break_On = _dummySprite;
+
+            CriticalPerfect_Shine = _dummySprite;
+            Perfect_Shine = _dummySprite;
+            Break_2600_Shine = _dummySprite;
+
+            CriticalPerfect = _dummySprite;
+            Perfect = _dummySprite;
+            Great = _dummySprite;
+            Good = _dummySprite;
+            Miss = _dummySprite;
+
+            Break_2600 = _dummySprite;
+            Break_2550 = _dummySprite;
+            Break_2500 = _dummySprite;
+            Break_2000 = _dummySprite;
+            Break_1500 = _dummySprite;
+            Break_1250 = _dummySprite;
+            Break_1000 = _dummySprite;
+            Break_0 = _dummySprite;
+
+            Fast = _dummySprite;
+            Late = _dummySprite;
+
+            CriticalPerfect_Fast = _dummySprite;
+            Perfect_Fast = _dummySprite;
+            Great_Fast = _dummySprite;
+            Good_Fast = _dummySprite;
+
+            Break_2600_Fast = _dummySprite;
+            Break_2550_Fast = _dummySprite;
+            Break_2500_Fast = _dummySprite;
+            Break_2000_Fast = _dummySprite;
+            Break_1500_Fast = _dummySprite;
+            Break_1250_Fast = _dummySprite;
+            Break_1000_Fast = _dummySprite;
+
+            CriticalPerfect_Late = _dummySprite;
+            Perfect_Late = _dummySprite;
+            Great_Late = _dummySprite;
+            Good_Late = _dummySprite;
+
+            Break_2600_Late = _dummySprite;
+            Break_2550_Late = _dummySprite;
+            Break_2500_Late = _dummySprite;
+            Break_2000_Late = _dummySprite;
+            Break_1500_Late = _dummySprite;
+            Break_1250_Late = _dummySprite;
+            Break_1000_Late = _dummySprite;
+
+            Touch = _dummySprite;
+            Touch_Each = _dummySprite;
+            Touch_Break = _dummySprite;
+            TouchPoint = _dummySprite;
+            TouchPoint_Each = _dummySprite;
+            TouchPoint_Break = _dummySprite;
+            TouchJust = _dummySprite;
+
+            TouchHold_Off = _dummySprite;
+
+            LoadingSplash = _dummySprite;
+
+            Outline = _dummySprite;
+
+            TapLine_Normal = _dummySprite;
+            TapLine_Each = _dummySprite;
+            TapLine_Slide = _dummySprite;
+            TapLine_Break = _dummySprite;
+
+            HoldEndPoint_Normal = _dummySprite;
+            HoldEndPoint_Each = _dummySprite;
+            HoldEndPoint_Break = _dummySprite;
+            HoldEndPoint_Mine = _dummySprite;
+
+            Array.Fill(Wifi, _dummySprite);
+            Array.Fill(Wifi_Each, _dummySprite);
+            Array.Fill(Wifi_Break, _dummySprite);
+            Array.Fill(Wifi_Mine, _dummySprite);
+            Array.Fill(Wifi_Break_Mine, _dummySprite);
+            Array.Fill(Just, _dummySprite);
+            Array.Fill(TouchBorder, _dummySprite);
+            Array.Fill(TouchBorder_Each, _dummySprite);
+            Array.Fill(TouchBorder_Break, _dummySprite);
+            Array.Fill(TouchBorder_Mine, _dummySprite);
+            Array.Fill(TouchBorder_Break_Mine, _dummySprite);
+            Array.Fill(TouchHold, _dummySprite);
+            Array.Fill(TouchHold_Break, _dummySprite);
+            Array.Fill(TouchHold_Mine, _dummySprite);
+            Array.Fill(TouchHold_Break_Mine, _dummySprite);
+            Array.Fill(EachLines, _dummySprite);
         }
+
+        /// <summary>Creates a skin named after an existing skin collection directory.</summary>
+        /// <param name="skinCollectionPath">The skin collection directory location on any backend.</param>
+        /// <param name="loadIntoMemory">Whether to load every sprite synchronously now.</param>
+        /// <exception cref="DirectoryNotFoundException">The location does not denote an existing directory.</exception>
+        public CustomSkin(string skinCollectionPath, bool loadIntoMemory) :
+            this(FileSystem.Directory.Open(skinCollectionPath), loadIntoMemory)
+        { }
+        /// <summary>Creates a skin with an explicit name from a skin collection directory.</summary>
+        /// <param name="name">The displayed skin name.</param>
+        /// <param name="skinCollectionPath">The skin collection directory location on any backend.</param>
+        /// <param name="loadIntoMemory">Whether to load every sprite synchronously now.</param>
+        public CustomSkin(string name, string skinCollectionPath, bool loadIntoMemory) :
+            this(name, FileSystem.Directory.Open(skinCollectionPath), loadIntoMemory)
+        { }
+        /// <summary>Creates a skin named after an existing skin collection directory handle.</summary>
+        /// <param name="directory">The skin collection directory on any backend.</param>
+        /// <param name="loadIntoMemory">Whether to load every sprite synchronously now.</param>
+        /// <exception cref="DirectoryNotFoundException">The handle does not denote an existing directory.</exception>
+        CustomSkin(StorageDirectory directory, bool loadIntoMemory) :
+            this(RequireName(directory), directory, loadIntoMemory)
+        { }
+        /// <summary>Creates a skin whose sprites are resolved through a skin collection directory handle.</summary>
+        /// <param name="name">The displayed skin name.</param>
+        /// <param name="directory">The skin collection directory on any backend.</param>
+        /// <param name="loadIntoMemory">Whether to load every sprite synchronously now.</param>
+        CustomSkin(string name, StorageDirectory directory, bool loadIntoMemory) : this(name)
+        {
+            _directory = directory;
+
+            if (loadIntoMemory)
+            {
+                PerformLoad();
+            }
+        }
+
+        /// <summary>Creates an unloaded skin from an existing skin collection directory.</summary>
+        /// <param name="skinCollectionPath">The skin collection directory location on any backend.</param>
+        /// <returns>A skin named after the directory, loaded on demand.</returns>
+        /// <exception cref="DirectoryNotFoundException">The location does not denote an existing directory.</exception>
+        public static CustomSkin Create(string skinCollectionPath)
+        {
+            return new CustomSkin(FileSystem.Directory.Open(skinCollectionPath), false);
+        }
+
+        /// <summary>Reads the backend-reported name of an existing skin collection directory.</summary>
+        /// <param name="directory">The skin collection directory on any backend.</param>
+        /// <returns>The directory's authoritative display name.</returns>
+        /// <exception cref="DirectoryNotFoundException">The handle does not denote an existing directory.</exception>
+        static string RequireName(StorageDirectory directory)
+        {
+            var entry = directory.Entry;
+            if (entry is null || !entry.IsDirectory)
+            {
+                throw new DirectoryNotFoundException($"The skin collection path '{directory.Location}' does not exist.");
+            }
+            return entry.Name;
+        }
+
+        /// <summary>Gets the skin collection directory of a loadable skin.</summary>
+        /// <returns>The skin collection directory handle.</returns>
+        /// <exception cref="InvalidOperationException">The built-in empty skin has no skin collection directory.</exception>
+        StorageDirectory RequireDirectory()
+        {
+            return _directory ?? throw new InvalidOperationException("The built-in empty skin has no skin collection directory.");
+        }
+
         public async UniTask LoadAsync(CancellationToken token = default)
         {
-            if(IsLoaded)
+            if (IsLoaded)
             {
                 return;
             }
+
             await _loadSyncLock.WaitAsync(token);
             try
             {
@@ -276,551 +391,170 @@ namespace MajdataPlay.Scenes.Game.Notes.Skins
                 {
                     return;
                 }
-                await UniTask.SwitchToMainThread();
-                if (File.Exists(this._path + "/outline.png"))
-                {
-                    IsOutlineAvailable = true;
-                }
-                Outline = SpriteLoader.Load(this._path + "/outline.png");
-                SubDisplay = SpriteLoader.Load(this._path + "/SubBackgourd.png");
-
-                Tap = SpriteLoader.Load(this._path + "/TapSkins/tap.png");
-                Tap_Each = SpriteLoader.Load(this._path + "/TapSkins/tap_each.png");
-                Tap_Break = SpriteLoader.Load(this._path + "/TapSkins/tap_break.png");
-                Tap_Ex = SpriteLoader.Load(this._path + "/TapSkins/tap_ex.png");
-
-                Slide = SpriteLoader.Load(this._path + "/SlideSkins/slide.png");
-                Slide_Each = SpriteLoader.Load(this._path + "/SlideSkins/slide_each.png");
-                Slide_Break = SpriteLoader.Load(this._path + "/SlideSkins/slide_break.png");
-                for (var i = 0; i < 11; i++)
-                {
-                    Wifi[i] = SpriteLoader.Load(this._path + "/WifiSkins/wifi_" + i + ".png");
-                    Wifi_Each[i] = SpriteLoader.Load(this._path + "/WifiSkins/wifi_each_" + i + ".png");
-                    Wifi_Break[i] = SpriteLoader.Load(this._path + "/WifiSkins/wifi_break_" + i + ".png");
-                }
-
-                Star = SpriteLoader.Load(this._path + "/StarSkins/star.png");
-                Star_Double = SpriteLoader.Load(this._path + "/StarSkins/star_double.png");
-                Star_Each = SpriteLoader.Load(this._path + "/StarSkins/star_each.png");
-                Star_Each_Double = SpriteLoader.Load(this._path + "/StarSkins/star_each_double.png");
-                Star_Break = SpriteLoader.Load(this._path + "/StarSkins/star_break.png");
-                Star_Break_Double = SpriteLoader.Load(this._path + "/StarSkins/star_break_double.png");
-                Star_Ex = SpriteLoader.Load(this._path + "/StarSkins/star_ex.png");
-                Star_Ex_Double = SpriteLoader.Load(this._path + "/StarSkins/star_ex_double.png");
-
-                var border = new Vector4(0, 58, 0, 58);
-                Hold = SpriteLoader.Load(this._path + "/HoldSkins/hold.png", border);
-                Hold_Each = SpriteLoader.Load(this._path + "/HoldSkins/hold_each.png", border);
-                Hold_Each_On = SpriteLoader.Load(this._path + "/HoldSkins/hold_each_on.png", border);
-                Hold_Ex = SpriteLoader.Load(this._path + "/HoldSkins/hold_ex.png", border);
-                Hold_Break = SpriteLoader.Load(this._path + "/HoldSkins/hold_break.png", border);
-                Hold_Break_On = SpriteLoader.Load(this._path + "/HoldSkins/hold_break_on.png", border);
-
-                if (File.Exists(Path.Combine(this._path, "HoldSkins/hold_on.png")))
-                {
-                    Hold_On = SpriteLoader.Load(this._path + "/HoldSkins/hold_on.png", border);
-                }
-                else
-                {
-                    Hold_On = Hold;
-                }
-                Hold_Off = SpriteLoader.Load(this._path + "/HoldSkins/hold_off.png", border);
-                if (File.Exists(Path.Combine(this._path, "HoldSkins/hold_each_on.png")))
-                {
-                    Hold_Each_On = SpriteLoader.Load(this._path + "/HoldSkins/hold_each_on.png", border);
-                }
-                else
-                {
-                    Hold_Each_On = Hold_Each;
-                }
-
-                if (File.Exists(Path.Combine(this._path, "HoldSkins/hold_break_on.png")))
-                {
-                    Hold_Break_On = SpriteLoader.Load(this._path + "/HoldSkins/hold_break_on.png", border);
-                }
-                else
-                {
-                    Hold_Break_On = Hold_Break;
-                }
-
-                // Critical Perfect
-
-                Just[0] = SpriteLoader.Load(this._path + "/SlideOKSkins/just_curv_r.png");
-                Just[1] = SpriteLoader.Load(this._path + "/SlideOKSkins/just_str_r.png");
-                Just[2] = SpriteLoader.Load(this._path + "/SlideOKSkins/just_wifi_u.png");
-                Just[3] = SpriteLoader.Load(this._path + "/SlideOKSkins/just_curv_l.png");
-                Just[4] = SpriteLoader.Load(this._path + "/SlideOKSkins/just_str_l.png");
-                Just[5] = SpriteLoader.Load(this._path + "/SlideOKSkins/just_wifi_d.png");
-
-                // Perfect
-
-                Just[6] = SpriteLoader.Load(this._path + "/SlideOKSkins/just_curv_r_p.png");
-                Just[7] = SpriteLoader.Load(this._path + "/SlideOKSkins/just_str_r_p.png");
-                Just[8] = SpriteLoader.Load(this._path + "/SlideOKSkins/just_wifi_u_p.png");
-                Just[9] = SpriteLoader.Load(this._path + "/SlideOKSkins/just_curv_l_p.png");
-                Just[10] = SpriteLoader.Load(this._path + "/SlideOKSkins/just_str_l_p.png");
-                Just[11] = SpriteLoader.Load(this._path + "/SlideOKSkins/just_wifi_d_p.png");
-
-                // Fast Perfect
-
-                Just[12] = SpriteLoader.Load(this._path + "/SlideOKSkins/just_curv_r_fast_p.png");
-                Just[13] = SpriteLoader.Load(this._path + "/SlideOKSkins/just_str_r_fast_p.png");
-                Just[14] = SpriteLoader.Load(this._path + "/SlideOKSkins/just_wifi_u_fast_p.png");
-                Just[15] = SpriteLoader.Load(this._path + "/SlideOKSkins/just_curv_l_fast_p.png");
-                Just[16] = SpriteLoader.Load(this._path + "/SlideOKSkins/just_str_l_fast_p.png");
-                Just[17] = SpriteLoader.Load(this._path + "/SlideOKSkins/just_wifi_d_fast_p.png");
-
-                // Fast Great
-
-                Just[18] = SpriteLoader.Load(this._path + "/SlideOKSkins/just_curv_r_fast_gr.png");
-                Just[19] = SpriteLoader.Load(this._path + "/SlideOKSkins/just_str_r_fast_gr.png");
-                Just[20] = SpriteLoader.Load(this._path + "/SlideOKSkins/just_wifi_u_fast_gr.png");
-                Just[21] = SpriteLoader.Load(this._path + "/SlideOKSkins/just_curv_l_fast_gr.png");
-                Just[22] = SpriteLoader.Load(this._path + "/SlideOKSkins/just_str_l_fast_gr.png");
-                Just[23] = SpriteLoader.Load(this._path + "/SlideOKSkins/just_wifi_d_fast_gr.png");
-
-                // Fast Good
-
-                Just[24] = SpriteLoader.Load(this._path + "/SlideOKSkins/just_curv_r_fast_gd.png");
-                Just[25] = SpriteLoader.Load(this._path + "/SlideOKSkins/just_str_r_fast_gd.png");
-                Just[26] = SpriteLoader.Load(this._path + "/SlideOKSkins/just_wifi_u_fast_gd.png");
-                Just[27] = SpriteLoader.Load(this._path + "/SlideOKSkins/just_curv_l_fast_gd.png");
-                Just[28] = SpriteLoader.Load(this._path + "/SlideOKSkins/just_str_l_fast_gd.png");
-                Just[29] = SpriteLoader.Load(this._path + "/SlideOKSkins/just_wifi_d_fast_gd.png");
-
-                // Late Perfect
-
-                Just[30] = SpriteLoader.Load(this._path + "/SlideOKSkins/just_curv_r_late_p.png");
-                Just[31] = SpriteLoader.Load(this._path + "/SlideOKSkins/just_str_r_late_p.png");
-                Just[32] = SpriteLoader.Load(this._path + "/SlideOKSkins/just_wifi_u_late_p.png");
-                Just[33] = SpriteLoader.Load(this._path + "/SlideOKSkins/just_curv_l_late_p.png");
-                Just[34] = SpriteLoader.Load(this._path + "/SlideOKSkins/just_str_l_late_p.png");
-                Just[35] = SpriteLoader.Load(this._path + "/SlideOKSkins/just_wifi_d_late_p.png");
-
-                // Late Great
-
-                Just[36] = SpriteLoader.Load(this._path + "/SlideOKSkins/just_curv_r_late_gr.png");
-                Just[37] = SpriteLoader.Load(this._path + "/SlideOKSkins/just_str_r_late_gr.png");
-                Just[38] = SpriteLoader.Load(this._path + "/SlideOKSkins/just_wifi_u_late_gr.png");
-                Just[39] = SpriteLoader.Load(this._path + "/SlideOKSkins/just_curv_l_late_gr.png");
-                Just[40] = SpriteLoader.Load(this._path + "/SlideOKSkins/just_str_l_late_gr.png");
-                Just[41] = SpriteLoader.Load(this._path + "/SlideOKSkins/just_wifi_d_late_gr.png");
-
-                // Late Good
-
-                Just[42] = SpriteLoader.Load(this._path + "/SlideOKSkins/just_curv_r_late_gd.png");
-                Just[43] = SpriteLoader.Load(this._path + "/SlideOKSkins/just_str_r_late_gd.png");
-                Just[44] = SpriteLoader.Load(this._path + "/SlideOKSkins/just_wifi_u_late_gd.png");
-                Just[45] = SpriteLoader.Load(this._path + "/SlideOKSkins/just_curv_l_late_gd.png");
-                Just[46] = SpriteLoader.Load(this._path + "/SlideOKSkins/just_str_l_late_gd.png");
-                Just[47] = SpriteLoader.Load(this._path + "/SlideOKSkins/just_wifi_d_late_gd.png");
-
-                // Miss
-
-                Just[48] = SpriteLoader.Load(this._path + "/SlideOKSkins/miss_curv_r.png");
-                Just[49] = SpriteLoader.Load(this._path + "/SlideOKSkins/miss_str_r.png");
-                Just[50] = SpriteLoader.Load(this._path + "/SlideOKSkins/miss_wifi_u.png");
-                Just[51] = SpriteLoader.Load(this._path + "/SlideOKSkins/miss_curv_l.png");
-                Just[52] = SpriteLoader.Load(this._path + "/SlideOKSkins/miss_str_l.png");
-                Just[53] = SpriteLoader.Load(this._path + "/SlideOKSkins/miss_wifi_d.png");
-
-                // TooFast
-                Just[54] = SpriteLoader.Load(this._path + "/SlideOKSkins/toofast_curv_r.png");
-                Just[55] = SpriteLoader.Load(this._path + "/SlideOKSkins/toofast_str_r.png");
-                Just[56] = SpriteLoader.Load(this._path + "/SlideOKSkins/toofast_wifi_u.png");
-                Just[57] = SpriteLoader.Load(this._path + "/SlideOKSkins/toofast_curv_l.png");
-                Just[58] = SpriteLoader.Load(this._path + "/SlideOKSkins/toofast_str_l.png");
-                Just[59] = SpriteLoader.Load(this._path + "/SlideOKSkins/toofast_wifi_d.png");
-
-                Miss = SpriteLoader.Load(this._path + "/JudgeTextSkins/judge_text_miss.png");
-                Good = SpriteLoader.Load(this._path + "/JudgeTextSkins/judge_text_good.png");
-                Great = SpriteLoader.Load(this._path + "/JudgeTextSkins/judge_text_great.png");
-                Perfect = SpriteLoader.Load(this._path + "/JudgeTextSkins/judge_text_perfect.png");
-                CriticalPerfect = SpriteLoader.Load(this._path + "/JudgeTextSkins/judge_text_cPerfect.png");
-
-                if (File.Exists(this._path + "/JudgeTextSkins/judge_text_cPerfect_fast.png"))
-                {
-                    CriticalPerfect_Fast = SpriteLoader.Load(this._path + "/JudgeTextSkins/judge_text_cPerfect_fast.png");
-                }
-                if (File.Exists(this._path + "/JudgeTextSkins/judge_text_cPerfect_late.png"))
-                {
-                    CriticalPerfect_Late = SpriteLoader.Load(this._path + "/JudgeTextSkins/judge_text_cPerfect_late.png");
-                }
-
-                if (File.Exists(this._path + "/JudgeTextSkins/judge_text_perfect_fast.png"))
-                {
-                    Perfect_Fast = SpriteLoader.Load(this._path + "/JudgeTextSkins/judge_text_perfect_fast.png");
-                }
-                if (File.Exists(this._path + "/JudgeTextSkins/judge_text_perfect_late.png"))
-                {
-                    Perfect_Late = SpriteLoader.Load(this._path + "/JudgeTextSkins/judge_text_perfect_late.png");
-                }
-
-                if (File.Exists(this._path + "/JudgeTextSkins/judge_text_great_fast.png"))
-                {
-                    Great_Fast = SpriteLoader.Load(this._path + "/JudgeTextSkins/judge_text_great_fast.png");
-                }
-                if (File.Exists(this._path + "/JudgeTextSkins/judge_text_great_late.png"))
-                {
-                    Great_Late = SpriteLoader.Load(this._path + "/JudgeTextSkins/judge_text_great_late.png");
-                }
-
-                if (File.Exists(this._path + "/JudgeTextSkins/judge_text_good_fast.png"))
-                {
-                    Good_Fast = SpriteLoader.Load(this._path + "/JudgeTextSkins/judge_text_good_fast.png");
-                }
-                if (File.Exists(this._path + "/JudgeTextSkins/judge_text_good_late.png"))
-                {
-                    Good_Late = SpriteLoader.Load(this._path + "/JudgeTextSkins/judge_text_good_late.png");
-                }
-
-
-
-                CriticalPerfect_Shine = SpriteLoader.Load(this._path + "/JudgeTextSkins/judge_text_cPerfect_break.png");
-                Break_2600_Shine = SpriteLoader.Load(this._path + "/JudgeTextSkins/judge_text_break_2600_shine.png");
-                Perfect_Shine = SpriteLoader.Load(this._path + "/JudgeTextSkins/judge_text_perfect_break.png");
-
-
-                //Break_2600 = SpriteLoader.Load(this._path + "/judge_text_break_2600.png");
-                //Break_2550 = SpriteLoader.Load(this._path + "/judge_text_break_2550.png");
-                //Break_2500 = SpriteLoader.Load(this._path + "/judge_text_break_2500.png");
-                //Break_2000 = SpriteLoader.Load(this._path + "/judge_text_break_2000.png");
-                //Break_1500 = SpriteLoader.Load(this._path + "/judge_text_break_1500.png");
-                //Break_1250 = SpriteLoader.Load(this._path + "/judge_text_break_1250.png");
-                //Break_1000 = SpriteLoader.Load(this._path + "/judge_text_break_1000.png");
-                //Break_0 = SpriteLoader.Load(this._path + "/judge_text_break_0.png");
-
-
-                foreach (var value in new int[] { 2600, 2550, 2500, 2000, 1500, 1250, 1000, 0 })
-                {
-                    var path = $"{this._path}/JudgeTextSkins/judge_text_break_{value}.png";
-                    var _path = $"{this._path}/JudgeTextSkins/judge_text_break_{value}_fast.png";
-                    var __path = $"{this._path}/JudgeTextSkins/judge_text_break_{value}_late.png";
-                    var type = typeof(CustomSkin);
-                    type.GetProperty($"Break_{value}").SetValue(this, SpriteLoader.Load(path));
-                    if (value == 0)
-                    {
-                        continue;
-                    }
-                    if (File.Exists(_path))
-                    {
-                        type.GetProperty($"Break_{value}_Fast").SetValue(this, SpriteLoader.Load(_path));
-                    }
-                    if (File.Exists(__path))
-                    {
-                        type.GetProperty($"Break_{value}_Late").SetValue(this, SpriteLoader.Load(__path));
-                    }
-                }
-
-                Fast = SpriteLoader.Load(this._path + "/JudgeTextSkins/fast.png");
-                Late = SpriteLoader.Load(this._path + "/JudgeTextSkins/late.png");
-
-                Touch = SpriteLoader.Load(this._path + "/TouchSkins/touch.png");
-                Touch_Each = SpriteLoader.Load(this._path + "/TouchSkins/touch_each.png");
-                Touch_Break = SpriteLoader.Load(this._path + "/TouchSkins/touch_break.png");
-                TouchPoint = SpriteLoader.Load(this._path + "/TouchSkins/touch_point.png");
-                TouchPoint_Each = SpriteLoader.Load(this._path + "/TouchSkins/touch_point_each.png");
-                TouchPoint_Break = SpriteLoader.Load(this._path + "/TouchSkins/touch_break_point.png");
-
-                TouchJust = SpriteLoader.Load(this._path + "/TouchSkins/touch_just.png");
-
-                TouchBorder[0] = SpriteLoader.Load(this._path + "/TouchSkins/touch_border_2.png");
-                TouchBorder[1] = SpriteLoader.Load(this._path + "/TouchSkins/touch_border_3.png");
-                TouchBorder_Each[0] = SpriteLoader.Load(this._path + "/TouchSkins/touch_border_2_each.png");
-                TouchBorder_Each[1] = SpriteLoader.Load(this._path + "/TouchSkins/touch_border_3_each.png");
-                TouchBorder_Break[0] = SpriteLoader.Load(this._path + "/TouchSkins/touch_break_border_2.png");
-                TouchBorder_Break[1] = SpriteLoader.Load(this._path + "/TouchSkins/touch_break_border_3.png");
-
-                for (var i = 0; i < 4; i++)
-                {
-                    TouchHold[i] = SpriteLoader.Load(this._path + "/TouchHoldSkins/touchhold_" + i + ".png");
-                    TouchHold_Break[i] = SpriteLoader.Load(this._path + "/TouchHoldSkins/touchhold_break_" + i + ".png");
-                }
-                TouchHold[4] = SpriteLoader.Load(this._path + "/TouchHoldSkins/touchhold_border.png");
-                TouchHold_Break[4] = SpriteLoader.Load(this._path + "/TouchHoldSkins/touchhold_break_border.png");
-                TouchHold_Off = SpriteLoader.Load(this._path + "/TouchHoldSkins/touchhold_off.png");
-
-                LoadingSplash = SpriteLoader.Load(this._path + "/now_loading.png");
-
-                TapLine_Normal = SpriteLoader.Load(this._path + "/NoteGuideSkins/Normal.png");
-                TapLine_Each = SpriteLoader.Load(this._path + "/NoteGuideSkins/Each.png");
-                TapLine_Slide = SpriteLoader.Load(this._path + "/NoteGuideSkins/Slide.png");
-                TapLine_Break = SpriteLoader.Load(this._path + "/NoteGuideSkins/Break.png");
-
-                EachLines[0] = SpriteLoader.Load(this._path + "/NoteGuideSkins/EachLine1.png");
-                EachLines[1] = SpriteLoader.Load(this._path + "/NoteGuideSkins/EachLine2.png");
-                EachLines[2] = SpriteLoader.Load(this._path + "/NoteGuideSkins/EachLine3.png");
-                EachLines[3] = SpriteLoader.Load(this._path + "/NoteGuideSkins/EachLine4.png");
-
-                HoldEndPoint_Normal = SpriteLoader.Load(this._path + "/NoteGuideSkins/Hold_End.png");
-                HoldEndPoint_Each = SpriteLoader.Load(this._path + "/NoteGuideSkins/Hold_Each_End.png");
-                HoldEndPoint_Break = SpriteLoader.Load(this._path + "/NoteGuideSkins/Hold_Break_End.png");
-
-                IsLoaded = true;
+                await PerformLoadAsync();
             }
             finally
             {
                 _loadSyncLock.Release();
             }
         }
+
         public async UniTask UnloadAsync(CancellationToken token = default)
         {
-            void DestroySprite(Sprite? sprite)
-            {
-                if (sprite != null)
-                {
-                    var tex = sprite.texture;
-                    UnityEngine.Object.DestroyImmediate(sprite, true);
-                    UnityEngine.Object.DestroyImmediate(tex, true);
-                }
-            }
-
-            void DestroyArray(Sprite?[] arr)
-            {
-                if (arr == null)
-                {
-                    return;
-                }
-                for (int i = 0; i < arr.Length; i++)
-                {
-                    DestroySprite(arr[i]);
-                }
-            }
-
-            if(!IsLoaded || !_canUnload)
+            if (!IsLoaded || !_canUnload)
             {
                 return;
             }
+
             await _loadSyncLock.WaitAsync(token);
             try
             {
                 await UniTask.SwitchToMainThread();
-                DestroySprite(SubDisplay);
+                if (!IsLoaded) return;
+                NoteSpriteResources.Unload(this);
 
-                DestroySprite(Tap);
-                DestroySprite(Tap_Each);
-                DestroySprite(Tap_Break);
-                DestroySprite(Tap_Ex);
+                SubDisplay = SafeDestroyIndependent(SubDisplay);
+                LoadingSplash = SafeDestroyIndependent(LoadingSplash);
 
-                DestroySprite(Slide);
-                DestroySprite(Slide_Each);
-                DestroySprite(Slide_Break);
+                Tap = SafeDestroyAtlasSprite(Tap);
+                Tap_Each = SafeDestroyAtlasSprite(Tap_Each);
+                Tap_Break = SafeDestroyAtlasSprite(Tap_Break);
+                Tap_Ex = SafeDestroyAtlasSprite(Tap_Ex);
+                Tap_Mine = SafeDestroyAtlasSprite(Tap_Mine);
+                Tap_Break_Mine = SafeDestroyAtlasSprite(Tap_Break_Mine);
 
-                DestroyArray(Wifi);
-                DestroyArray(Wifi_Each);
-                DestroyArray(Wifi_Break);
+                Slide = SafeDestroyAtlasSprite(Slide);
+                Slide_Each = SafeDestroyAtlasSprite(Slide_Each);
+                Slide_Break = SafeDestroyAtlasSprite(Slide_Break);
+                Slide_Mine = SafeDestroyAtlasSprite(Slide_Mine);
+                Slide_Break_Mine = SafeDestroyAtlasSprite(Slide_Break_Mine);
 
-                DestroySprite(Star);
-                DestroySprite(Star_Double);
-                DestroySprite(Star_Each);
-                DestroySprite(Star_Each_Double);
-                DestroySprite(Star_Break);
-                DestroySprite(Star_Break_Double);
-                DestroySprite(Star_Ex);
-                DestroySprite(Star_Ex_Double);
+                SafeDestroyAtlasSpriteArray(Wifi);
+                SafeDestroyAtlasSpriteArray(Wifi_Each);
+                SafeDestroyAtlasSpriteArray(Wifi_Break);
+                SafeDestroyAtlasSpriteArray(Wifi_Mine);
+                SafeDestroyAtlasSpriteArray(Wifi_Break_Mine);
 
-                DestroySprite(Hold);
-                DestroySprite(Hold_On);
-                DestroySprite(Hold_Off);
-                DestroySprite(Hold_Each);
-                DestroySprite(Hold_Each_On);
-                DestroySprite(Hold_Ex);
-                DestroySprite(Hold_Break);
-                DestroySprite(Hold_Break_On);
+                Star = SafeDestroyAtlasSprite(Star);
+                Star_Double = SafeDestroyAtlasSprite(Star_Double);
+                Star_Each = SafeDestroyAtlasSprite(Star_Each);
+                Star_Each_Double = SafeDestroyAtlasSprite(Star_Each_Double);
+                Star_Break = SafeDestroyAtlasSprite(Star_Break);
+                Star_Break_Double = SafeDestroyAtlasSprite(Star_Break_Double);
+                Star_Ex = SafeDestroyAtlasSprite(Star_Ex);
+                Star_Ex_Double = SafeDestroyAtlasSprite(Star_Ex_Double);
+                Star_Mine = SafeDestroyAtlasSprite(Star_Mine);
+                Star_Double_Mine = SafeDestroyAtlasSprite(Star_Double_Mine);
+                Star_Break_Mine = SafeDestroyAtlasSprite(Star_Break_Mine);
+                Star_Break_Double_Mine = SafeDestroyAtlasSprite(Star_Break_Double_Mine);
 
-                DestroyArray(Just);
+                Hold = SafeDestroyAtlasSprite(Hold);
+                Hold_On = SafeDestroyAtlasSprite(Hold_On);
+                Hold_Off = SafeDestroyAtlasSprite(Hold_Off);
+                Hold_Each = SafeDestroyAtlasSprite(Hold_Each);
+                Hold_Each_On = SafeDestroyAtlasSprite(Hold_Each_On);
+                Hold_Ex = SafeDestroyAtlasSprite(Hold_Ex);
+                Hold_Break = SafeDestroyAtlasSprite(Hold_Break);
+                Hold_Break_On = SafeDestroyAtlasSprite(Hold_Break_On);
+                Hold_Mine = SafeDestroyAtlasSprite(Hold_Mine);
+                Hold_Mine_On = SafeDestroyAtlasSprite(Hold_Mine_On);
+                Hold_Break_Mine = SafeDestroyAtlasSprite(Hold_Break_Mine);
+                Hold_Break_Mine_On = SafeDestroyAtlasSprite(Hold_Break_Mine_On);
 
-                DestroySprite(CriticalPerfect_Shine);
-                DestroySprite(Perfect_Shine);
-                DestroySprite(Break_2600_Shine);
+                SafeDestroyAtlasSpriteArray(Just);
 
-                DestroySprite(CriticalPerfect);
-                DestroySprite(Perfect);
-                DestroySprite(Great);
-                DestroySprite(Good);
-                DestroySprite(Miss);
+                CriticalPerfect_Shine = SafeDestroyAtlasSprite(CriticalPerfect_Shine);
+                Perfect_Shine = SafeDestroyAtlasSprite(Perfect_Shine);
+                Break_2600_Shine = SafeDestroyAtlasSprite(Break_2600_Shine);
 
-                DestroySprite(Break_2600);
-                DestroySprite(Break_2550);
-                DestroySprite(Break_2500);
-                DestroySprite(Break_2000);
-                DestroySprite(Break_1500);
-                DestroySprite(Break_1250);
-                DestroySprite(Break_1000);
-                DestroySprite(Break_0);
-                DestroySprite(Fast);
-                DestroySprite(Late);
+                CriticalPerfect = SafeDestroyAtlasSprite(CriticalPerfect);
+                Perfect = SafeDestroyAtlasSprite(Perfect);
+                Great = SafeDestroyAtlasSprite(Great);
+                Good = SafeDestroyAtlasSprite(Good);
+                Miss = SafeDestroyAtlasSprite(Miss);
 
-                DestroySprite(CriticalPerfect_Fast);
-                DestroySprite(Perfect_Fast);
-                DestroySprite(Great_Fast);
-                DestroySprite(Good_Fast);
+                Break_2600 = SafeDestroyAtlasSprite(Break_2600);
+                Break_2550 = SafeDestroyAtlasSprite(Break_2550);
+                Break_2500 = SafeDestroyAtlasSprite(Break_2500);
+                Break_2000 = SafeDestroyAtlasSprite(Break_2000);
+                Break_1500 = SafeDestroyAtlasSprite(Break_1500);
+                Break_1250 = SafeDestroyAtlasSprite(Break_1250);
+                Break_1000 = SafeDestroyAtlasSprite(Break_1000);
+                Break_0 = SafeDestroyAtlasSprite(Break_0);
+                Fast = SafeDestroyAtlasSprite(Fast);
+                Late = SafeDestroyAtlasSprite(Late);
 
-                DestroySprite(Break_2600_Fast);
-                DestroySprite(Break_2550_Fast);
-                DestroySprite(Break_2500_Fast);
-                DestroySprite(Break_2000_Fast);
-                DestroySprite(Break_1500_Fast);
-                DestroySprite(Break_1250_Fast);
-                DestroySprite(Break_1000_Fast);
+                CriticalPerfect_Fast = SafeDestroyAtlasSprite(CriticalPerfect_Fast);
+                Perfect_Fast = SafeDestroyAtlasSprite(Perfect_Fast);
+                Great_Fast = SafeDestroyAtlasSprite(Great_Fast);
+                Good_Fast = SafeDestroyAtlasSprite(Good_Fast);
 
-                DestroySprite(CriticalPerfect_Late);
-                DestroySprite(Perfect_Late);
-                DestroySprite(Great_Late);
-                DestroySprite(Good_Late);
+                Break_2600_Fast = SafeDestroyAtlasSprite(Break_2600_Fast);
+                Break_2550_Fast = SafeDestroyAtlasSprite(Break_2550_Fast);
+                Break_2500_Fast = SafeDestroyAtlasSprite(Break_2500_Fast);
+                Break_2000_Fast = SafeDestroyAtlasSprite(Break_2000_Fast);
+                Break_1500_Fast = SafeDestroyAtlasSprite(Break_1500_Fast);
+                Break_1250_Fast = SafeDestroyAtlasSprite(Break_1250_Fast);
+                Break_1000_Fast = SafeDestroyAtlasSprite(Break_1000_Fast);
 
-                DestroySprite(Break_2600_Late);
-                DestroySprite(Break_2550_Late);
-                DestroySprite(Break_2500_Late);
-                DestroySprite(Break_2000_Late);
-                DestroySprite(Break_1500_Late);
-                DestroySprite(Break_1250_Late);
-                DestroySprite(Break_1000_Late);
+                CriticalPerfect_Late = SafeDestroyAtlasSprite(CriticalPerfect_Late);
+                Perfect_Late = SafeDestroyAtlasSprite(Perfect_Late);
+                Great_Late = SafeDestroyAtlasSprite(Great_Late);
+                Good_Late = SafeDestroyAtlasSprite(Good_Late);
 
-                DestroySprite(Touch);
-                DestroySprite(Touch_Each);
-                DestroySprite(Touch_Break);
-                DestroySprite(TouchPoint);
-                DestroySprite(TouchPoint_Each);
-                DestroySprite(TouchPoint_Break);
-                DestroySprite(TouchJust);
+                Break_2600_Late = SafeDestroyAtlasSprite(Break_2600_Late);
+                Break_2550_Late = SafeDestroyAtlasSprite(Break_2550_Late);
+                Break_2500_Late = SafeDestroyAtlasSprite(Break_2500_Late);
+                Break_2000_Late = SafeDestroyAtlasSprite(Break_2000_Late);
+                Break_1500_Late = SafeDestroyAtlasSprite(Break_1500_Late);
+                Break_1250_Late = SafeDestroyAtlasSprite(Break_1250_Late);
+                Break_1000_Late = SafeDestroyAtlasSprite(Break_1000_Late);
 
-                DestroyArray(TouchBorder);
-                DestroyArray(TouchBorder_Each);
-                DestroyArray(TouchBorder_Break);
+                Touch = SafeDestroyAtlasSprite(Touch);
+                Touch_Each = SafeDestroyAtlasSprite(Touch_Each);
+                Touch_Break = SafeDestroyAtlasSprite(Touch_Break);
+                Touch_Mine = SafeDestroyAtlasSprite(Touch_Mine);
+                Touch_Break_Mine = SafeDestroyAtlasSprite(Touch_Break_Mine);
 
-                DestroyArray(TouchHold);
-                DestroyArray(TouchHold_Break);
+                TouchPoint = SafeDestroyAtlasSprite(TouchPoint);
+                TouchPoint_Each = SafeDestroyAtlasSprite(TouchPoint_Each);
+                TouchPoint_Break = SafeDestroyAtlasSprite(TouchPoint_Break);
+                TouchPoint_Mine = SafeDestroyAtlasSprite(TouchPoint_Mine);
+                TouchPoint_Break_Mine = SafeDestroyAtlasSprite(TouchPoint_Break_Mine);
+                TouchJust = SafeDestroyAtlasSprite(TouchJust);
 
-                DestroySprite(TouchHold_Off);
+                SafeDestroyAtlasSpriteArray(TouchBorder);
+                SafeDestroyAtlasSpriteArray(TouchBorder_Each);
+                SafeDestroyAtlasSpriteArray(TouchBorder_Break);
+                SafeDestroyAtlasSpriteArray(TouchBorder_Mine);
+                SafeDestroyAtlasSpriteArray(TouchBorder_Break_Mine);
 
-                DestroySprite(LoadingSplash);
-                DestroySprite(Outline);
+                SafeDestroyAtlasSpriteArray(TouchHold);
+                SafeDestroyAtlasSpriteArray(TouchHold_Break);
+                SafeDestroyAtlasSpriteArray(TouchHold_Mine);
+                SafeDestroyAtlasSpriteArray(TouchHold_Break_Mine);
 
-                DestroySprite(TapLine_Normal);
-                DestroySprite(TapLine_Each);
-                DestroySprite(TapLine_Slide);
-                DestroySprite(TapLine_Break);
+                TouchHold_Off = SafeDestroyAtlasSprite(TouchHold_Off);
+                Outline = SafeDestroyAtlasSprite(Outline);
 
-                DestroyArray(EachLines);
+                TapLine_Normal = SafeDestroyAtlasSprite(TapLine_Normal);
+                TapLine_Each = SafeDestroyAtlasSprite(TapLine_Each);
+                TapLine_Slide = SafeDestroyAtlasSprite(TapLine_Slide);
+                TapLine_Break = SafeDestroyAtlasSprite(TapLine_Break);
+                TapLine_Mine = SafeDestroyAtlasSprite(TapLine_Mine);
 
-                DestroySprite(HoldEndPoint_Normal);
-                DestroySprite(HoldEndPoint_Each);
-                DestroySprite(HoldEndPoint_Break);
+                SafeDestroyAtlasSpriteArray(EachLines);
 
-                SubDisplay = null;
+                HoldEndPoint_Normal = SafeDestroyAtlasSprite(HoldEndPoint_Normal);
+                HoldEndPoint_Each = SafeDestroyAtlasSprite(HoldEndPoint_Each);
+                HoldEndPoint_Break = SafeDestroyAtlasSprite(HoldEndPoint_Break);
+                HoldEndPoint_Mine = SafeDestroyAtlasSprite(HoldEndPoint_Mine);
 
-                Tap = null;
-                Tap_Each = null;
-                Tap_Break = null;
-                Tap_Ex = null;
-
-                Slide = null;
-                Slide_Each = null;
-                Slide_Break = null;
-
-                //Wifi = null;
-                //Wifi_Each = null;
-                //Wifi_Break = null;
-
-                Star = null;
-                Star_Double = null;
-                Star_Each = null;
-                Star_Each_Double = null;
-                Star_Break = null;
-                Star_Break_Double = null;
-                Star_Ex = null;
-                Star_Ex_Double = null;
-
-                Hold = null;
-                Hold_On = null;
-                Hold_Off = null;
-                Hold_Each = null;
-                Hold_Each_On = null;
-                Hold_Ex = null;
-                Hold_Break = null;
-                Hold_Break_On = null;
-
-                //Just = null;
-
-                CriticalPerfect_Shine = null;
-                Perfect_Shine = null;
-                Break_2600_Shine = null;
-
-                CriticalPerfect = null;
-                Perfect = null;
-                Great = null;
-                Good = null;
-                Miss = null;
-
-                Break_2600 = null;
-                Break_2550 = null;
-                Break_2500 = null;
-                Break_2000 = null;
-                Break_1500 = null;
-                Break_1250 = null;
-                Break_1000 = null;
-                Break_0 = null;
-                Fast = null;
-                Late = null;
-
-                CriticalPerfect_Fast = null;
-                Perfect_Fast = null;
-                Great_Fast = null;
-                Good_Fast = null;
-
-                Break_2600_Fast = null;
-                Break_2550_Fast = null;
-                Break_2500_Fast = null;
-                Break_2000_Fast = null;
-                Break_1500_Fast = null;
-                Break_1250_Fast = null;
-                Break_1000_Fast = null;
-
-                CriticalPerfect_Late = null;
-                Perfect_Late = null;
-                Great_Late = null;
-                Good_Late = null;
-
-                Break_2600_Late = null;
-                Break_2550_Late = null;
-                Break_2500_Late = null;
-                Break_2000_Late = null;
-                Break_1500_Late = null;
-                Break_1250_Late = null;
-                Break_1000_Late = null;
-
-                Touch = null;
-                Touch_Each = null;
-                Touch_Break = null;
-                TouchPoint = null;
-                TouchPoint_Each = null;
-                TouchPoint_Break = null;
-                TouchJust = null;
-
-                //TouchBorder = null;
-                //TouchBorder_Each = null;
-                //TouchBorder_Break = null;
-
-                //TouchHold = null;
-                //TouchHold_Break = null;
-
-                TouchHold_Off = null;
-
-                LoadingSplash = null;
-
-                Outline = null;
-
-                TapLine_Normal = null;
-                TapLine_Each = null;
-                TapLine_Slide = null;
-                TapLine_Break = null;
-
-                //EachLines = null;
-
-                HoldEndPoint_Normal = null;
-                HoldEndPoint_Each = null;
-                HoldEndPoint_Break = null;
+                if (_atlasTexture != null)
+                {
+                    UnityEngine.Object.DestroyImmediate(_atlasTexture, true);
+                    _atlasTexture = null;
+                }
 
                 IsLoaded = false;
             }
@@ -829,613 +563,1188 @@ namespace MajdataPlay.Scenes.Game.Notes.Skins
                 _loadSyncLock.Release();
             }
         }
-        public CustomSkin(string skinCollectionPath, bool loadIntoMemory)
+
+        private async UniTask PerformLoadAsync()
         {
-            Name = new DirectoryInfo(skinCollectionPath).Name;
-            _path = skinCollectionPath;
+            var directory = RequireDirectory();
+            IsOutlineAvailable = directory.FindFile("outline.png") is not null;
 
-            if(loadIntoMemory)
-            {
-                if (File.Exists(skinCollectionPath + "/outline.png"))
-                {
-                    IsOutlineAvailable = true;
-                }
-                Outline = SpriteLoader.Load(skinCollectionPath + "/outline.png");
-                SubDisplay = SpriteLoader.Load(skinCollectionPath + "/SubBackgourd.png");
+            SubDisplay = await LoadSpriteDirectAsync("SubBackgourd.png");
+            LoadingSplash = await LoadSpriteDirectAsync("now_loading.png");
 
-                Tap = SpriteLoader.Load(skinCollectionPath + "/TapSkins/tap.png");
-                Tap_Each = SpriteLoader.Load(skinCollectionPath + "/TapSkins/tap_each.png");
-                Tap_Break = SpriteLoader.Load(skinCollectionPath + "/TapSkins/tap_break.png");
-                Tap_Ex = SpriteLoader.Load(skinCollectionPath + "/TapSkins/tap_ex.png");
+            var builder = new AtlasBuilder(directory, SpriteOutlineSnap, SpriteOutlineDetail, SpriteAlphaTolerance);
+            QueueAtlasElements(builder);
 
-                Slide = SpriteLoader.Load(skinCollectionPath + "/SlideSkins/slide.png");
-                Slide_Each = SpriteLoader.Load(skinCollectionPath + "/SlideSkins/slide_each.png");
-                Slide_Break = SpriteLoader.Load(skinCollectionPath + "/SlideSkins/slide_break.png");
-                for (var i = 0; i < 11; i++)
-                {
-                    Wifi[i] = SpriteLoader.Load(skinCollectionPath + "/WifiSkins/wifi_" + i + ".png");
-                    Wifi_Each[i] = SpriteLoader.Load(skinCollectionPath + "/WifiSkins/wifi_each_" + i + ".png");
-                    Wifi_Break[i] = SpriteLoader.Load(skinCollectionPath + "/WifiSkins/wifi_break_" + i + ".png");
-                }
+            _atlasTexture = await builder.BuildAndAssignAsync();
 
-                Star = SpriteLoader.Load(skinCollectionPath + "/StarSkins/star.png");
-                Star_Double = SpriteLoader.Load(skinCollectionPath + "/StarSkins/star_double.png");
-                Star_Each = SpriteLoader.Load(skinCollectionPath + "/StarSkins/star_each.png");
-                Star_Each_Double = SpriteLoader.Load(skinCollectionPath + "/StarSkins/star_each_double.png");
-                Star_Break = SpriteLoader.Load(skinCollectionPath + "/StarSkins/star_break.png");
-                Star_Break_Double = SpriteLoader.Load(skinCollectionPath + "/StarSkins/star_break_double.png");
-                Star_Ex = SpriteLoader.Load(skinCollectionPath + "/StarSkins/star_ex.png");
-                Star_Ex_Double = SpriteLoader.Load(skinCollectionPath + "/StarSkins/star_ex_double.png");
-
-                var border = new Vector4(0, 58, 0, 58);
-                Hold = SpriteLoader.Load(skinCollectionPath + "/HoldSkins/hold.png", border);
-                Hold_Each = SpriteLoader.Load(skinCollectionPath + "/HoldSkins/hold_each.png", border);
-                Hold_Each_On = SpriteLoader.Load(skinCollectionPath + "/HoldSkins/hold_each_on.png", border);
-                Hold_Ex = SpriteLoader.Load(skinCollectionPath + "/HoldSkins/hold_ex.png", border);
-                Hold_Break = SpriteLoader.Load(skinCollectionPath + "/HoldSkins/hold_break.png", border);
-                Hold_Break_On = SpriteLoader.Load(skinCollectionPath + "/HoldSkins/hold_break_on.png", border);
-
-                if (File.Exists(Path.Combine(skinCollectionPath, "HoldSkins/hold_on.png")))
-                {
-                    Hold_On = SpriteLoader.Load(skinCollectionPath + "/HoldSkins/hold_on.png", border);
-                }
-                else
-                {
-                    Hold_On = Hold;
-                }
-                Hold_Off = SpriteLoader.Load(skinCollectionPath + "/HoldSkins/hold_off.png", border);
-                if (File.Exists(Path.Combine(skinCollectionPath, "HoldSkins/hold_each_on.png")))
-                {
-                    Hold_Each_On = SpriteLoader.Load(skinCollectionPath + "/HoldSkins/hold_each_on.png", border);
-                }
-                else
-                {
-                    Hold_Each_On = Hold_Each;
-                }
-
-                if (File.Exists(Path.Combine(skinCollectionPath, "HoldSkins/hold_break_on.png")))
-                {
-                    Hold_Break_On = SpriteLoader.Load(skinCollectionPath + "/HoldSkins/hold_break_on.png", border);
-                }
-                else
-                {
-                    Hold_Break_On = Hold_Break;
-                }
-
-                // Critical Perfect
-
-                Just[0] = SpriteLoader.Load(skinCollectionPath + "/SlideOKSkins/just_curv_r.png");
-                Just[1] = SpriteLoader.Load(skinCollectionPath + "/SlideOKSkins/just_str_r.png");
-                Just[2] = SpriteLoader.Load(skinCollectionPath + "/SlideOKSkins/just_wifi_u.png");
-                Just[3] = SpriteLoader.Load(skinCollectionPath + "/SlideOKSkins/just_curv_l.png");
-                Just[4] = SpriteLoader.Load(skinCollectionPath + "/SlideOKSkins/just_str_l.png");
-                Just[5] = SpriteLoader.Load(skinCollectionPath + "/SlideOKSkins/just_wifi_d.png");
-
-                // Perfect
-
-                Just[6] = SpriteLoader.Load(skinCollectionPath + "/SlideOKSkins/just_curv_r_p.png");
-                Just[7] = SpriteLoader.Load(skinCollectionPath + "/SlideOKSkins/just_str_r_p.png");
-                Just[8] = SpriteLoader.Load(skinCollectionPath + "/SlideOKSkins/just_wifi_u_p.png");
-                Just[9] = SpriteLoader.Load(skinCollectionPath + "/SlideOKSkins/just_curv_l_p.png");
-                Just[10] = SpriteLoader.Load(skinCollectionPath + "/SlideOKSkins/just_str_l_p.png");
-                Just[11] = SpriteLoader.Load(skinCollectionPath + "/SlideOKSkins/just_wifi_d_p.png");
-
-                // Fast Perfect
-
-                Just[12] = SpriteLoader.Load(skinCollectionPath + "/SlideOKSkins/just_curv_r_fast_p.png");
-                Just[13] = SpriteLoader.Load(skinCollectionPath + "/SlideOKSkins/just_str_r_fast_p.png");
-                Just[14] = SpriteLoader.Load(skinCollectionPath + "/SlideOKSkins/just_wifi_u_fast_p.png");
-                Just[15] = SpriteLoader.Load(skinCollectionPath + "/SlideOKSkins/just_curv_l_fast_p.png");
-                Just[16] = SpriteLoader.Load(skinCollectionPath + "/SlideOKSkins/just_str_l_fast_p.png");
-                Just[17] = SpriteLoader.Load(skinCollectionPath + "/SlideOKSkins/just_wifi_d_fast_p.png");
-
-                // Fast Great
-
-                Just[18] = SpriteLoader.Load(skinCollectionPath + "/SlideOKSkins/just_curv_r_fast_gr.png");
-                Just[19] = SpriteLoader.Load(skinCollectionPath + "/SlideOKSkins/just_str_r_fast_gr.png");
-                Just[20] = SpriteLoader.Load(skinCollectionPath + "/SlideOKSkins/just_wifi_u_fast_gr.png");
-                Just[21] = SpriteLoader.Load(skinCollectionPath + "/SlideOKSkins/just_curv_l_fast_gr.png");
-                Just[22] = SpriteLoader.Load(skinCollectionPath + "/SlideOKSkins/just_str_l_fast_gr.png");
-                Just[23] = SpriteLoader.Load(skinCollectionPath + "/SlideOKSkins/just_wifi_d_fast_gr.png");
-
-                // Fast Good
-
-                Just[24] = SpriteLoader.Load(skinCollectionPath + "/SlideOKSkins/just_curv_r_fast_gd.png");
-                Just[25] = SpriteLoader.Load(skinCollectionPath + "/SlideOKSkins/just_str_r_fast_gd.png");
-                Just[26] = SpriteLoader.Load(skinCollectionPath + "/SlideOKSkins/just_wifi_u_fast_gd.png");
-                Just[27] = SpriteLoader.Load(skinCollectionPath + "/SlideOKSkins/just_curv_l_fast_gd.png");
-                Just[28] = SpriteLoader.Load(skinCollectionPath + "/SlideOKSkins/just_str_l_fast_gd.png");
-                Just[29] = SpriteLoader.Load(skinCollectionPath + "/SlideOKSkins/just_wifi_d_fast_gd.png");
-
-                // Late Perfect
-
-                Just[30] = SpriteLoader.Load(skinCollectionPath + "/SlideOKSkins/just_curv_r_late_p.png");
-                Just[31] = SpriteLoader.Load(skinCollectionPath + "/SlideOKSkins/just_str_r_late_p.png");
-                Just[32] = SpriteLoader.Load(skinCollectionPath + "/SlideOKSkins/just_wifi_u_late_p.png");
-                Just[33] = SpriteLoader.Load(skinCollectionPath + "/SlideOKSkins/just_curv_l_late_p.png");
-                Just[34] = SpriteLoader.Load(skinCollectionPath + "/SlideOKSkins/just_str_l_late_p.png");
-                Just[35] = SpriteLoader.Load(skinCollectionPath + "/SlideOKSkins/just_wifi_d_late_p.png");
-
-                // Late Great
-
-                Just[36] = SpriteLoader.Load(skinCollectionPath + "/SlideOKSkins/just_curv_r_late_gr.png");
-                Just[37] = SpriteLoader.Load(skinCollectionPath + "/SlideOKSkins/just_str_r_late_gr.png");
-                Just[38] = SpriteLoader.Load(skinCollectionPath + "/SlideOKSkins/just_wifi_u_late_gr.png");
-                Just[39] = SpriteLoader.Load(skinCollectionPath + "/SlideOKSkins/just_curv_l_late_gr.png");
-                Just[40] = SpriteLoader.Load(skinCollectionPath + "/SlideOKSkins/just_str_l_late_gr.png");
-                Just[41] = SpriteLoader.Load(skinCollectionPath + "/SlideOKSkins/just_wifi_d_late_gr.png");
-
-                // Late Good
-
-                Just[42] = SpriteLoader.Load(skinCollectionPath + "/SlideOKSkins/just_curv_r_late_gd.png");
-                Just[43] = SpriteLoader.Load(skinCollectionPath + "/SlideOKSkins/just_str_r_late_gd.png");
-                Just[44] = SpriteLoader.Load(skinCollectionPath + "/SlideOKSkins/just_wifi_u_late_gd.png");
-                Just[45] = SpriteLoader.Load(skinCollectionPath + "/SlideOKSkins/just_curv_l_late_gd.png");
-                Just[46] = SpriteLoader.Load(skinCollectionPath + "/SlideOKSkins/just_str_l_late_gd.png");
-                Just[47] = SpriteLoader.Load(skinCollectionPath + "/SlideOKSkins/just_wifi_d_late_gd.png");
-
-                // Miss
-
-                Just[48] = SpriteLoader.Load(skinCollectionPath + "/SlideOKSkins/miss_curv_r.png");
-                Just[49] = SpriteLoader.Load(skinCollectionPath + "/SlideOKSkins/miss_str_r.png");
-                Just[50] = SpriteLoader.Load(skinCollectionPath + "/SlideOKSkins/miss_wifi_u.png");
-                Just[51] = SpriteLoader.Load(skinCollectionPath + "/SlideOKSkins/miss_curv_l.png");
-                Just[52] = SpriteLoader.Load(skinCollectionPath + "/SlideOKSkins/miss_str_l.png");
-                Just[53] = SpriteLoader.Load(skinCollectionPath + "/SlideOKSkins/miss_wifi_d.png");
-
-                // TooFast
-                Just[54] = SpriteLoader.Load(skinCollectionPath + "/SlideOKSkins/toofast_curv_r.png");
-                Just[55] = SpriteLoader.Load(skinCollectionPath + "/SlideOKSkins/toofast_str_r.png");
-                Just[56] = SpriteLoader.Load(skinCollectionPath + "/SlideOKSkins/toofast_wifi_u.png");
-                Just[57] = SpriteLoader.Load(skinCollectionPath + "/SlideOKSkins/toofast_curv_l.png");
-                Just[58] = SpriteLoader.Load(skinCollectionPath + "/SlideOKSkins/toofast_str_l.png");
-                Just[59] = SpriteLoader.Load(skinCollectionPath + "/SlideOKSkins/toofast_wifi_d.png");
-
-                Miss = SpriteLoader.Load(skinCollectionPath + "/JudgeTextSkins/judge_text_miss.png");
-                Good = SpriteLoader.Load(skinCollectionPath + "/JudgeTextSkins/judge_text_good.png");
-                Great = SpriteLoader.Load(skinCollectionPath + "/JudgeTextSkins/judge_text_great.png");
-                Perfect = SpriteLoader.Load(skinCollectionPath + "/JudgeTextSkins/judge_text_perfect.png");
-                CriticalPerfect = SpriteLoader.Load(skinCollectionPath + "/JudgeTextSkins/judge_text_cPerfect.png");
-
-                if (File.Exists(skinCollectionPath + "/JudgeTextSkins/judge_text_cPerfect_fast.png"))
-                {
-                    CriticalPerfect_Fast = SpriteLoader.Load(skinCollectionPath + "/JudgeTextSkins/judge_text_cPerfect_fast.png");
-                }
-                if (File.Exists(skinCollectionPath + "/JudgeTextSkins/judge_text_cPerfect_late.png"))
-                {
-                    CriticalPerfect_Late = SpriteLoader.Load(skinCollectionPath + "/JudgeTextSkins/judge_text_cPerfect_late.png");
-                }
-
-                if (File.Exists(skinCollectionPath + "/JudgeTextSkins/judge_text_perfect_fast.png"))
-                {
-                    Perfect_Fast = SpriteLoader.Load(skinCollectionPath + "/JudgeTextSkins/judge_text_perfect_fast.png");
-                }
-                if (File.Exists(skinCollectionPath + "/JudgeTextSkins/judge_text_perfect_late.png"))
-                {
-                    Perfect_Late = SpriteLoader.Load(skinCollectionPath + "/JudgeTextSkins/judge_text_perfect_late.png");
-                }
-
-                if (File.Exists(skinCollectionPath + "/JudgeTextSkins/judge_text_great_fast.png"))
-                {
-                    Great_Fast = SpriteLoader.Load(skinCollectionPath + "/JudgeTextSkins/judge_text_great_fast.png");
-                }
-                if (File.Exists(skinCollectionPath + "/JudgeTextSkins/judge_text_great_late.png"))
-                {
-                    Great_Late = SpriteLoader.Load(skinCollectionPath + "/JudgeTextSkins/judge_text_great_late.png");
-                }
-
-                if (File.Exists(skinCollectionPath + "/JudgeTextSkins/judge_text_good_fast.png"))
-                {
-                    Good_Fast = SpriteLoader.Load(skinCollectionPath + "/JudgeTextSkins/judge_text_good_fast.png");
-                }
-                if (File.Exists(skinCollectionPath + "/JudgeTextSkins/judge_text_good_late.png"))
-                {
-                    Good_Late = SpriteLoader.Load(skinCollectionPath + "/JudgeTextSkins/judge_text_good_late.png");
-                }
-
-
-
-                CriticalPerfect_Shine = SpriteLoader.Load(skinCollectionPath + "/JudgeTextSkins/judge_text_cPerfect_break.png");
-                Break_2600_Shine = SpriteLoader.Load(skinCollectionPath + "/JudgeTextSkins/judge_text_break_2600_shine.png");
-                Perfect_Shine = SpriteLoader.Load(skinCollectionPath + "/JudgeTextSkins/judge_text_perfect_break.png");
-
-
-                //Break_2600 = SpriteLoader.Load(skinCollectionPath + "/judge_text_break_2600.png");
-                //Break_2550 = SpriteLoader.Load(skinCollectionPath + "/judge_text_break_2550.png");
-                //Break_2500 = SpriteLoader.Load(skinCollectionPath + "/judge_text_break_2500.png");
-                //Break_2000 = SpriteLoader.Load(skinCollectionPath + "/judge_text_break_2000.png");
-                //Break_1500 = SpriteLoader.Load(skinCollectionPath + "/judge_text_break_1500.png");
-                //Break_1250 = SpriteLoader.Load(skinCollectionPath + "/judge_text_break_1250.png");
-                //Break_1000 = SpriteLoader.Load(skinCollectionPath + "/judge_text_break_1000.png");
-                //Break_0 = SpriteLoader.Load(skinCollectionPath + "/judge_text_break_0.png");
-
-
-                foreach (var value in new int[] { 2600, 2550, 2500, 2000, 1500, 1250, 1000, 0 })
-                {
-                    var path = $"{skinCollectionPath}/JudgeTextSkins/judge_text_break_{value}.png";
-                    var _path = $"{skinCollectionPath}/JudgeTextSkins/judge_text_break_{value}_fast.png";
-                    var __path = $"{skinCollectionPath}/JudgeTextSkins/judge_text_break_{value}_late.png";
-                    var type = typeof(CustomSkin);
-                    type.GetProperty($"Break_{value}").SetValue(this, SpriteLoader.Load(path));
-                    if (value == 0)
-                    {
-                        continue;
-                    }
-                    if (File.Exists(_path))
-                    {
-                        type.GetProperty($"Break_{value}_Fast").SetValue(this, SpriteLoader.Load(_path));
-                    }
-                    if (File.Exists(__path))
-                    {
-                        type.GetProperty($"Break_{value}_Late").SetValue(this, SpriteLoader.Load(__path));
-                    }
-                }
-
-                Fast = SpriteLoader.Load(skinCollectionPath + "/JudgeTextSkins/fast.png");
-                Late = SpriteLoader.Load(skinCollectionPath + "/JudgeTextSkins/late.png");
-
-                Touch = SpriteLoader.Load(skinCollectionPath + "/TouchSkins/touch.png");
-                Touch_Each = SpriteLoader.Load(skinCollectionPath + "/TouchSkins/touch_each.png");
-                Touch_Break = SpriteLoader.Load(skinCollectionPath + "/TouchSkins/touch_break.png");
-                TouchPoint = SpriteLoader.Load(skinCollectionPath + "/TouchSkins/touch_point.png");
-                TouchPoint_Each = SpriteLoader.Load(skinCollectionPath + "/TouchSkins/touch_point_each.png");
-                TouchPoint_Break = SpriteLoader.Load(skinCollectionPath + "/TouchSkins/touch_break_point.png");
-
-                TouchJust = SpriteLoader.Load(skinCollectionPath + "/TouchSkins/touch_just.png");
-
-                TouchBorder[0] = SpriteLoader.Load(skinCollectionPath + "/TouchSkins/touch_border_2.png");
-                TouchBorder[1] = SpriteLoader.Load(skinCollectionPath + "/TouchSkins/touch_border_3.png");
-                TouchBorder_Each[0] = SpriteLoader.Load(skinCollectionPath + "/TouchSkins/touch_border_2_each.png");
-                TouchBorder_Each[1] = SpriteLoader.Load(skinCollectionPath + "/TouchSkins/touch_border_3_each.png");
-                TouchBorder_Break[0] = SpriteLoader.Load(skinCollectionPath + "/TouchSkins/touch_break_border_2.png");
-                TouchBorder_Break[1] = SpriteLoader.Load(skinCollectionPath + "/TouchSkins/touch_break_border_3.png");
-
-                for (var i = 0; i < 4; i++)
-                {
-                    TouchHold[i] = SpriteLoader.Load(skinCollectionPath + "/TouchHoldSkins/touchhold_" + i + ".png");
-                    TouchHold_Break[i] = SpriteLoader.Load(skinCollectionPath + "/TouchHoldSkins/touchhold_break_" + i + ".png");
-                }
-                TouchHold[4] = SpriteLoader.Load(skinCollectionPath + "/TouchHoldSkins/touchhold_border.png");
-                TouchHold_Break[4] = SpriteLoader.Load(skinCollectionPath + "/TouchHoldSkins/touchhold_break_border.png");
-                TouchHold_Off = SpriteLoader.Load(skinCollectionPath + "/TouchHoldSkins/touchhold_off.png");
-
-                LoadingSplash = SpriteLoader.Load(skinCollectionPath + "/now_loading.png");
-
-                TapLine_Normal = SpriteLoader.Load(skinCollectionPath + "/NoteGuideSkins/Normal.png");
-                TapLine_Each = SpriteLoader.Load(skinCollectionPath + "/NoteGuideSkins/Each.png");
-                TapLine_Slide = SpriteLoader.Load(skinCollectionPath + "/NoteGuideSkins/Slide.png");
-                TapLine_Break = SpriteLoader.Load(skinCollectionPath + "/NoteGuideSkins/Break.png");
-
-                EachLines[0] = SpriteLoader.Load(skinCollectionPath + "/NoteGuideSkins/EachLine1.png");
-                EachLines[1] = SpriteLoader.Load(skinCollectionPath + "/NoteGuideSkins/EachLine2.png");
-                EachLines[2] = SpriteLoader.Load(skinCollectionPath + "/NoteGuideSkins/EachLine3.png");
-                EachLines[3] = SpriteLoader.Load(skinCollectionPath + "/NoteGuideSkins/EachLine4.png");
-
-                HoldEndPoint_Normal = SpriteLoader.Load(skinCollectionPath + "/NoteGuideSkins/Hold_End.png");
-                HoldEndPoint_Each = SpriteLoader.Load(skinCollectionPath + "/NoteGuideSkins/Hold_Each_End.png");
-                HoldEndPoint_Break = SpriteLoader.Load(skinCollectionPath + "/NoteGuideSkins/Hold_Break_End.png");
-
-                IsLoaded = true;
-            }
+            ProcessFallbacks();
+            NoteSpriteResources.PreloadMeshes(this, builder.Sprites);
+            IsLoaded = true;
         }
-        public static CustomSkin Load(string skinCollectionPath)
+
+        private void PerformLoad()
         {
-            var task = LoadAsync(skinCollectionPath);
-            task.Wait();
-            return task.Result;
+            var directory = RequireDirectory();
+            IsOutlineAvailable = directory.FindFile("outline.png") is not null;
+
+            SubDisplay = LoadSpriteDirectSync("SubBackgourd.png");
+            LoadingSplash = LoadSpriteDirectSync("now_loading.png");
+
+            var builder = new AtlasBuilder(directory, SpriteOutlineSnap, SpriteOutlineDetail, SpriteAlphaTolerance);
+            QueueAtlasElements(builder);
+
+            _atlasTexture = builder.BuildAndAssign();
+
+            ProcessFallbacks();
+            NoteSpriteResources.PreloadMeshes(this, builder.Sprites);
+            IsLoaded = true;
         }
-        public static CustomSkin Create(string skinCollectionPath)
+
+        private void QueueAtlasElements(AtlasBuilder builder)
         {
-            var dirInfo = new DirectoryInfo(skinCollectionPath);
-            if (!dirInfo.Exists)
-            {
-                throw new DirectoryNotFoundException($"The skin collection path '{skinCollectionPath}' does not exist.");
-            }
-            return new CustomSkin(skinCollectionPath, false)
-            {
-                Name = dirInfo.Name
-            };
-        }
-        public static async Task<CustomSkin> LoadAsync(string skinCollectionPath)
-        {
-            await UniTask.SwitchToThreadPool();
-            var dirInfo = new DirectoryInfo(skinCollectionPath);
-            if(!dirInfo.Exists)
-            {
-                throw new DirectoryNotFoundException($"The skin collection path '{skinCollectionPath}' does not exist.");
-            }
-            var customSkin = new CustomSkin();
+            var border = new Vector4(0, 58, 0, 58);
 
-            customSkin.Name = dirInfo.Name;
+            builder.Add("outline.png", s => Outline = s);
 
-            if (File.Exists(skinCollectionPath + "/outline.png"))
-            {
-                customSkin.IsOutlineAvailable = true;
-            }
-            await UniTask.Yield();
-            customSkin.Outline = SpriteLoader.Load(skinCollectionPath + "/outline.png");
-            customSkin.SubDisplay = SpriteLoader.Load(skinCollectionPath + "/SubBackgourd.png");
+            builder.Add("TapSkins/tap.png", s => Tap = s);
+            builder.Add("TapSkins/tap_each.png", s => Tap_Each = s);
+            builder.Add("TapSkins/tap_break.png", s => Tap_Break = s);
+            builder.Add("TapSkins/tap_break_mine.png", s => Tap_Break_Mine = s);
+            builder.Add("TapSkins/tap_mine.png", s => Tap_Mine = s);
+            builder.Add("TapSkins/tap_ex.png", s => Tap_Ex = s);
 
-            customSkin.Tap = SpriteLoader.Load(skinCollectionPath + "/TapSkins/tap.png");
-            customSkin.Tap_Each = SpriteLoader.Load(skinCollectionPath + "/TapSkins/tap_each.png");
-            customSkin.Tap_Break = SpriteLoader.Load(skinCollectionPath + "/TapSkins/tap_break.png");
-            customSkin.Tap_Ex = SpriteLoader.Load(skinCollectionPath + "/TapSkins/tap_ex.png");
+            builder.Add("SlideSkins/slide.png", s => Slide = s);
+            builder.Add("SlideSkins/slide_each.png", s => Slide_Each = s);
+            builder.Add("SlideSkins/slide_break.png", s => Slide_Break = s);
+            builder.Add("SlideSkins/slide_mine.png", s => Slide_Mine = s);
+            builder.Add("SlideSkins/slide_break_mine.png", s => Slide_Break_Mine = s);
 
-            await UniTask.Yield();
-            customSkin.Slide = SpriteLoader.Load(skinCollectionPath + "/SlideSkins/slide.png");
-            customSkin.Slide_Each = SpriteLoader.Load(skinCollectionPath + "/SlideSkins/slide_each.png");
-            customSkin.Slide_Break = SpriteLoader.Load(skinCollectionPath + "/SlideSkins/slide_break.png");
-            
             for (var i = 0; i < 11; i++)
             {
-                customSkin.Wifi[i] = SpriteLoader.Load(skinCollectionPath + "/WifiSkins/wifi_" + i + ".png");
-                customSkin.Wifi_Each[i] = SpriteLoader.Load(skinCollectionPath + "/WifiSkins/wifi_each_" + i + ".png");
-                customSkin.Wifi_Break[i] = SpriteLoader.Load(skinCollectionPath + "/WifiSkins/wifi_break_" + i + ".png");
-                await UniTask.Yield();
+                int index = i;
+                builder.Add($"WifiSkins/wifi_{index}.png", s => Wifi[index] = s);
+                builder.Add($"WifiSkins/wifi_each_{index}.png", s => Wifi_Each[index] = s);
+                builder.Add($"WifiSkins/wifi_break_{index}.png", s => Wifi_Break[index] = s);
+                builder.Add($"WifiSkins/wifi_mine_{index}.png", s => Wifi_Mine[index] = s);
+                builder.Add($"WifiSkins/wifi_break_mine_{index}.png", s => Wifi_Break_Mine[index] = s);
             }
-            await UniTask.Yield();
-            customSkin.Star = SpriteLoader.Load(skinCollectionPath + "/StarSkins/star.png");
-            customSkin.Star_Double = SpriteLoader.Load(skinCollectionPath + "/StarSkins/star_double.png");
-            customSkin.Star_Each = SpriteLoader.Load(skinCollectionPath + "/StarSkins/star_each.png");
-            customSkin.Star_Each_Double = SpriteLoader.Load(skinCollectionPath + "/StarSkins/star_each_double.png");
-            customSkin.Star_Break = SpriteLoader.Load(skinCollectionPath + "/StarSkins/star_break.png");
-            customSkin.Star_Break_Double = SpriteLoader.Load(skinCollectionPath + "/StarSkins/star_break_double.png");
-            customSkin.Star_Ex = SpriteLoader.Load(skinCollectionPath + "/StarSkins/star_ex.png");
-            customSkin.Star_Ex_Double = SpriteLoader.Load(skinCollectionPath + "/StarSkins/star_ex_double.png");
 
-            await UniTask.Yield();
-            var border = new Vector4(0, 58, 0, 58);
-            customSkin.Hold = SpriteLoader.Load(skinCollectionPath + "/HoldSkins/hold.png", border);
-            customSkin.Hold_Each = SpriteLoader.Load(skinCollectionPath + "/HoldSkins/hold_each.png", border);
-            customSkin.Hold_Each_On = SpriteLoader.Load(skinCollectionPath + "/HoldSkins/hold_each_on.png", border);
-            customSkin.Hold_Ex = SpriteLoader.Load(skinCollectionPath + "/HoldSkins/hold_ex.png", border);
-            customSkin.Hold_Break = SpriteLoader.Load(skinCollectionPath + "/HoldSkins/hold_break.png", border);
-            customSkin.Hold_Break_On = SpriteLoader.Load(skinCollectionPath + "/HoldSkins/hold_break_on.png", border);
-            await UniTask.Yield();
+            builder.Add("StarSkins/star.png", s => Star = s);
+            builder.Add("StarSkins/star_double.png", s => Star_Double = s);
+            builder.Add("StarSkins/star_double_mine.png", s => Star_Double_Mine = s);
+            builder.Add("StarSkins/star_each.png", s => Star_Each = s);
+            builder.Add("StarSkins/star_mine.png", s => Star_Mine = s);
+            builder.Add("StarSkins/star_each_double.png", s => Star_Each_Double = s);
+            builder.Add("StarSkins/star_break.png", s => Star_Break = s);
+            builder.Add("StarSkins/star_break_mine.png", s => Star_Break_Mine = s);
+            builder.Add("StarSkins/star_break_double.png", s => Star_Break_Double = s);
+            builder.Add("StarSkins/star_break_double_mine.png", s => Star_Break_Double_Mine = s);
+            builder.Add("StarSkins/star_ex.png", s => Star_Ex = s);
+            builder.Add("StarSkins/star_ex_double.png", s => Star_Ex_Double = s);
 
-            if (File.Exists(Path.Combine(skinCollectionPath, "HoldSkins/hold_on.png")))
+            builder.Add("HoldSkins/hold.png", s => Hold = s, border);
+            builder.Add("HoldSkins/hold_mine.png", s => Hold_Mine = s, border);
+            builder.Add("HoldSkins/hold_each.png", s => Hold_Each = s, border);
+            builder.Add("HoldSkins/hold_ex.png", s => Hold_Ex = s, border);
+            builder.Add("HoldSkins/hold_break.png", s => Hold_Break = s, border);
+            builder.Add("HoldSkins/hold_break_mine.png", s => Hold_Break_Mine = s, border);
+            builder.Add("HoldSkins/hold_off.png", s => Hold_Off = s, border);
+
+            builder.Add("HoldSkins/hold_on.png", s => Hold_On = s, border);
+            builder.Add("HoldSkins/hold_each_on.png", s => Hold_Each_On = s, border);
+            builder.Add("HoldSkins/hold_break_on.png", s => Hold_Break_On = s, border);
+
+            builder.Add("HoldSkins/hold_mine_on.png", s => Hold_Mine_On = s, border);
+            builder.Add("HoldSkins/hold_break_mine_on.png", s => Hold_Break_Mine_On = s, border);
+
+            string[] slideStates = { "curv_r", "str_r", "wifi_u", "curv_l", "str_l", "wifi_d" };
+            for (int i = 0; i < 6; i++)
             {
-                customSkin.Hold_On = SpriteLoader.Load(skinCollectionPath + "/HoldSkins/hold_on.png", border);
-            }
-            else
-            {
-                customSkin.Hold_On = customSkin.Hold;
-            }
-            customSkin.Hold_Off = SpriteLoader.Load(skinCollectionPath + "/HoldSkins/hold_off.png", border);
-            if (File.Exists(Path.Combine(skinCollectionPath, "HoldSkins/hold_each_on.png")))
-            {
-                customSkin.Hold_Each_On = SpriteLoader.Load(skinCollectionPath + "/HoldSkins/hold_each_on.png", border);
-            }
-            else
-            {
-                customSkin.Hold_Each_On = customSkin.Hold_Each;
+                int index = i;
+                string state = slideStates[index];
+                builder.Add($"SlideOKSkins/just_{state}.png", s => Just[index] = s);
+                builder.Add($"SlideOKSkins/just_{state}_p.png", s => Just[index + 6] = s);
+                builder.Add($"SlideOKSkins/just_{state}_fast_p.png", s => Just[index + 12] = s);
+                builder.Add($"SlideOKSkins/just_{state}_fast_gr.png", s => Just[index + 18] = s);
+                builder.Add($"SlideOKSkins/just_{state}_fast_gd.png", s => Just[index + 24] = s);
+                builder.Add($"SlideOKSkins/just_{state}_late_p.png", s => Just[index + 30] = s);
+                builder.Add($"SlideOKSkins/just_{state}_late_gr.png", s => Just[index + 36] = s);
+                builder.Add($"SlideOKSkins/just_{state}_late_gd.png", s => Just[index + 42] = s);
+                builder.Add($"SlideOKSkins/miss_{state}.png", s => Just[index + 48] = s);
+                builder.Add($"SlideOKSkins/toofast_{state}.png", s => Just[index + 54] = s);
             }
 
-            if (File.Exists(Path.Combine(skinCollectionPath, "HoldSkins/hold_break_on.png")))
-            {
-                customSkin.Hold_Break_On = SpriteLoader.Load(skinCollectionPath + "/HoldSkins/hold_break_on.png", border);
-            }
-            else
-            {
-                customSkin.Hold_Break_On = customSkin.Hold_Break;
-            }
+            builder.Add("JudgeTextSkins/judge_text_miss.png", s => Miss = s);
+            builder.Add("JudgeTextSkins/judge_text_good.png", s => Good = s);
+            builder.Add("JudgeTextSkins/judge_text_great.png", s => Great = s);
+            builder.Add("JudgeTextSkins/judge_text_perfect.png", s => Perfect = s);
+            builder.Add("JudgeTextSkins/judge_text_cPerfect.png", s => CriticalPerfect = s);
 
-            // Critical Perfect
-            await UniTask.Yield();
-            customSkin.Just[0] = SpriteLoader.Load(skinCollectionPath + "/SlideOKSkins/just_curv_r.png");
-            customSkin.Just[1] = SpriteLoader.Load(skinCollectionPath + "/SlideOKSkins/just_str_r.png");
-            customSkin.Just[2] = SpriteLoader.Load(skinCollectionPath + "/SlideOKSkins/just_wifi_u.png");
-            customSkin.Just[3] = SpriteLoader.Load(skinCollectionPath + "/SlideOKSkins/just_curv_l.png");
-            customSkin.Just[4] = SpriteLoader.Load(skinCollectionPath + "/SlideOKSkins/just_str_l.png");
-            customSkin.Just[5] = SpriteLoader.Load(skinCollectionPath + "/SlideOKSkins/just_wifi_d.png");
+            builder.Add("JudgeTextSkins/judge_text_cPerfect_fast.png", s => CriticalPerfect_Fast = s);
+            builder.Add("JudgeTextSkins/judge_text_cPerfect_late.png", s => CriticalPerfect_Late = s);
+            builder.Add("JudgeTextSkins/judge_text_perfect_fast.png", s => Perfect_Fast = s);
+            builder.Add("JudgeTextSkins/judge_text_perfect_late.png", s => Perfect_Late = s);
+            builder.Add("JudgeTextSkins/judge_text_great_fast.png", s => Great_Fast = s);
+            builder.Add("JudgeTextSkins/judge_text_great_late.png", s => Great_Late = s);
+            builder.Add("JudgeTextSkins/judge_text_good_fast.png", s => Good_Fast = s);
+            builder.Add("JudgeTextSkins/judge_text_good_late.png", s => Good_Late = s);
 
-            // Perfect
-            await UniTask.Yield();
-            customSkin.Just[6] = SpriteLoader.Load(skinCollectionPath + "/SlideOKSkins/just_curv_r_p.png");
-            customSkin.Just[7] = SpriteLoader.Load(skinCollectionPath + "/SlideOKSkins/just_str_r_p.png");
-            customSkin.Just[8] = SpriteLoader.Load(skinCollectionPath + "/SlideOKSkins/just_wifi_u_p.png");
-            customSkin.Just[9] = SpriteLoader.Load(skinCollectionPath + "/SlideOKSkins/just_curv_l_p.png");
-            customSkin.Just[10] = SpriteLoader.Load(skinCollectionPath + "/SlideOKSkins/just_str_l_p.png");
-            customSkin.Just[11] = SpriteLoader.Load(skinCollectionPath + "/SlideOKSkins/just_wifi_d_p.png");
+            builder.Add("JudgeTextSkins/judge_text_cPerfect_break.png", s => CriticalPerfect_Shine = s);
+            builder.Add("JudgeTextSkins/judge_text_break_2600_shine.png", s => Break_2600_Shine = s);
+            builder.Add("JudgeTextSkins/judge_text_perfect_break.png", s => Perfect_Shine = s);
 
-            // Fast Perfect
-            await UniTask.Yield();
-            customSkin.Just[12] = SpriteLoader.Load(skinCollectionPath + "/SlideOKSkins/just_curv_r_fast_p.png");
-            customSkin.Just[13] = SpriteLoader.Load(skinCollectionPath + "/SlideOKSkins/just_str_r_fast_p.png");
-            customSkin.Just[14] = SpriteLoader.Load(skinCollectionPath + "/SlideOKSkins/just_wifi_u_fast_p.png");
-            customSkin.Just[15] = SpriteLoader.Load(skinCollectionPath + "/SlideOKSkins/just_curv_l_fast_p.png");
-            customSkin.Just[16] = SpriteLoader.Load(skinCollectionPath + "/SlideOKSkins/just_str_l_fast_p.png");
-            customSkin.Just[17] = SpriteLoader.Load(skinCollectionPath + "/SlideOKSkins/just_wifi_d_fast_p.png");
+            LoadBreakSetToBuilder(builder, 2600, s => Break_2600 = s, s => Break_2600_Fast = s, s => Break_2600_Late = s);
+            LoadBreakSetToBuilder(builder, 2550, s => Break_2550 = s, s => Break_2550_Fast = s, s => Break_2550_Late = s);
+            LoadBreakSetToBuilder(builder, 2500, s => Break_2500 = s, s => Break_2500_Fast = s, s => Break_2500_Late = s);
+            LoadBreakSetToBuilder(builder, 2000, s => Break_2000 = s, s => Break_2000_Fast = s, s => Break_2000_Late = s);
+            LoadBreakSetToBuilder(builder, 1500, s => Break_1500 = s, s => Break_1500_Fast = s, s => Break_1500_Late = s);
+            LoadBreakSetToBuilder(builder, 1250, s => Break_1250 = s, s => Break_1250_Fast = s, s => Break_1250_Late = s);
+            LoadBreakSetToBuilder(builder, 1000, s => Break_1000 = s, s => Break_1000_Fast = s, s => Break_1000_Late = s);
+            LoadBreakSetToBuilder(builder, 0, s => Break_0 = s, null, null);
 
-            // Fast Great
-            await UniTask.Yield();
-            customSkin.Just[18] = SpriteLoader.Load(skinCollectionPath + "/SlideOKSkins/just_curv_r_fast_gr.png");
-            customSkin.Just[19] = SpriteLoader.Load(skinCollectionPath + "/SlideOKSkins/just_str_r_fast_gr.png");
-            customSkin.Just[20] = SpriteLoader.Load(skinCollectionPath + "/SlideOKSkins/just_wifi_u_fast_gr.png");
-            customSkin.Just[21] = SpriteLoader.Load(skinCollectionPath + "/SlideOKSkins/just_curv_l_fast_gr.png");
-            customSkin.Just[22] = SpriteLoader.Load(skinCollectionPath + "/SlideOKSkins/just_str_l_fast_gr.png");
-            customSkin.Just[23] = SpriteLoader.Load(skinCollectionPath + "/SlideOKSkins/just_wifi_d_fast_gr.png");
+            builder.Add("JudgeTextSkins/fast.png", s => Fast = s);
+            builder.Add("JudgeTextSkins/late.png", s => Late = s);
 
-            // Fast Good
-            await UniTask.Yield();
-            customSkin.Just[24] = SpriteLoader.Load(skinCollectionPath + "/SlideOKSkins/just_curv_r_fast_gd.png");
-            customSkin.Just[25] = SpriteLoader.Load(skinCollectionPath + "/SlideOKSkins/just_str_r_fast_gd.png");
-            customSkin.Just[26] = SpriteLoader.Load(skinCollectionPath + "/SlideOKSkins/just_wifi_u_fast_gd.png");
-            customSkin.Just[27] = SpriteLoader.Load(skinCollectionPath + "/SlideOKSkins/just_curv_l_fast_gd.png");
-            customSkin.Just[28] = SpriteLoader.Load(skinCollectionPath + "/SlideOKSkins/just_str_l_fast_gd.png");
-            customSkin.Just[29] = SpriteLoader.Load(skinCollectionPath + "/SlideOKSkins/just_wifi_d_fast_gd.png");
+            builder.Add("TouchSkins/touch.png", s => Touch = s);
+            builder.Add("TouchSkins/touch_mine.png", s => Touch_Mine = s);
+            builder.Add("TouchSkins/touch_each.png", s => Touch_Each = s);
+            builder.Add("TouchSkins/touch_break.png", s => Touch_Break = s);
+            builder.Add("TouchSkins/touch_break_mine.png", s => Touch_Break_Mine = s);
 
-            // Late Perfect
-            await UniTask.Yield();
-            customSkin.Just[30] = SpriteLoader.Load(skinCollectionPath + "/SlideOKSkins/just_curv_r_late_p.png");
-            customSkin.Just[31] = SpriteLoader.Load(skinCollectionPath + "/SlideOKSkins/just_str_r_late_p.png");
-            customSkin.Just[32] = SpriteLoader.Load(skinCollectionPath + "/SlideOKSkins/just_wifi_u_late_p.png");
-            customSkin.Just[33] = SpriteLoader.Load(skinCollectionPath + "/SlideOKSkins/just_curv_l_late_p.png");
-            customSkin.Just[34] = SpriteLoader.Load(skinCollectionPath + "/SlideOKSkins/just_str_l_late_p.png");
-            customSkin.Just[35] = SpriteLoader.Load(skinCollectionPath + "/SlideOKSkins/just_wifi_d_late_p.png");
+            builder.Add("TouchSkins/touch_point.png", s => TouchPoint = s);
+            builder.Add("TouchSkins/touch_point_each.png", s => TouchPoint_Each = s);
+            builder.Add("TouchSkins/touch_break_point.png", s => TouchPoint_Break = s);
+            builder.Add("TouchSkins/touch_point_mine.png", s => TouchPoint_Mine = s);
+            builder.Add("TouchSkins/touch_break_point_mine.png", s => TouchPoint_Break_Mine = s);
+            builder.Add("TouchSkins/touch_just.png", s => TouchJust = s);
 
-            // Late Great
-            await UniTask.Yield();
-            customSkin.Just[36] = SpriteLoader.Load(skinCollectionPath + "/SlideOKSkins/just_curv_r_late_gr.png");
-            customSkin.Just[37] = SpriteLoader.Load(skinCollectionPath + "/SlideOKSkins/just_str_r_late_gr.png");
-            customSkin.Just[38] = SpriteLoader.Load(skinCollectionPath + "/SlideOKSkins/just_wifi_u_late_gr.png");
-            customSkin.Just[39] = SpriteLoader.Load(skinCollectionPath + "/SlideOKSkins/just_curv_l_late_gr.png");
-            customSkin.Just[40] = SpriteLoader.Load(skinCollectionPath + "/SlideOKSkins/just_str_l_late_gr.png");
-            customSkin.Just[41] = SpriteLoader.Load(skinCollectionPath + "/SlideOKSkins/just_wifi_d_late_gr.png");
-
-            // Late Good
-            await UniTask.Yield();
-            customSkin.Just[42] = SpriteLoader.Load(skinCollectionPath + "/SlideOKSkins/just_curv_r_late_gd.png");
-            customSkin.Just[43] = SpriteLoader.Load(skinCollectionPath + "/SlideOKSkins/just_str_r_late_gd.png");
-            customSkin.Just[44] = SpriteLoader.Load(skinCollectionPath + "/SlideOKSkins/just_wifi_u_late_gd.png");
-            customSkin.Just[45] = SpriteLoader.Load(skinCollectionPath + "/SlideOKSkins/just_curv_l_late_gd.png");
-            customSkin.Just[46] = SpriteLoader.Load(skinCollectionPath + "/SlideOKSkins/just_str_l_late_gd.png");
-            customSkin.Just[47] = SpriteLoader.Load(skinCollectionPath + "/SlideOKSkins/just_wifi_d_late_gd.png");
-
-            // Miss
-            await UniTask.Yield();
-            customSkin.Just[48] = SpriteLoader.Load(skinCollectionPath + "/SlideOKSkins/miss_curv_r.png");
-            customSkin.Just[49] = SpriteLoader.Load(skinCollectionPath + "/SlideOKSkins/miss_str_r.png");
-            customSkin.Just[50] = SpriteLoader.Load(skinCollectionPath + "/SlideOKSkins/miss_wifi_u.png");
-            customSkin.Just[51] = SpriteLoader.Load(skinCollectionPath + "/SlideOKSkins/miss_curv_l.png");
-            customSkin.Just[52] = SpriteLoader.Load(skinCollectionPath + "/SlideOKSkins/miss_str_l.png");
-            customSkin.Just[53] = SpriteLoader.Load(skinCollectionPath + "/SlideOKSkins/miss_wifi_d.png");
-
-            // TooFast
-            await UniTask.Yield();
-            customSkin.Just[54] = SpriteLoader.Load(skinCollectionPath + "/SlideOKSkins/toofast_curv_r.png");
-            customSkin.Just[55] = SpriteLoader.Load(skinCollectionPath + "/SlideOKSkins/toofast_str_r.png");
-            customSkin.Just[56] = SpriteLoader.Load(skinCollectionPath + "/SlideOKSkins/toofast_wifi_u.png");
-            customSkin.Just[57] = SpriteLoader.Load(skinCollectionPath + "/SlideOKSkins/toofast_curv_l.png");
-            customSkin.Just[58] = SpriteLoader.Load(skinCollectionPath + "/SlideOKSkins/toofast_str_l.png");
-            customSkin.Just[59] = SpriteLoader.Load(skinCollectionPath + "/SlideOKSkins/toofast_wifi_d.png");
-
-            await UniTask.Yield();
-            customSkin.Miss = SpriteLoader.Load(skinCollectionPath + "/JudgeTextSkins/judge_text_miss.png");
-            customSkin.Good = SpriteLoader.Load(skinCollectionPath + "/JudgeTextSkins/judge_text_good.png");
-            customSkin.Great = SpriteLoader.Load(skinCollectionPath + "/JudgeTextSkins/judge_text_great.png");
-            customSkin.Perfect = SpriteLoader.Load(skinCollectionPath + "/JudgeTextSkins/judge_text_perfect.png");
-            customSkin.CriticalPerfect = SpriteLoader.Load(skinCollectionPath + "/JudgeTextSkins/judge_text_cPerfect.png");
-
-            if (File.Exists(skinCollectionPath + "/JudgeTextSkins/judge_text_cPerfect_fast.png"))
-            {
-                customSkin.CriticalPerfect_Fast = SpriteLoader.Load(skinCollectionPath + "/JudgeTextSkins/judge_text_cPerfect_fast.png");
-            }
-            if (File.Exists(skinCollectionPath + "/JudgeTextSkins/judge_text_cPerfect_late.png"))
-            {
-                customSkin.CriticalPerfect_Late = SpriteLoader.Load(skinCollectionPath + "/JudgeTextSkins/judge_text_cPerfect_late.png");
-            }
-
-            if (File.Exists(skinCollectionPath + "/JudgeTextSkins/judge_text_perfect_fast.png"))
-            {
-                customSkin.Perfect_Fast = SpriteLoader.Load(skinCollectionPath + "/JudgeTextSkins/judge_text_perfect_fast.png");
-            }
-            if (File.Exists(skinCollectionPath + "/JudgeTextSkins/judge_text_perfect_late.png"))
-            {
-                customSkin.Perfect_Late = SpriteLoader.Load(skinCollectionPath + "/JudgeTextSkins/judge_text_perfect_late.png");
-            }
-            await UniTask.Yield();
-            if (File.Exists(skinCollectionPath + "/JudgeTextSkins/judge_text_great_fast.png"))
-            {
-                customSkin.Great_Fast = SpriteLoader.Load(skinCollectionPath + "/JudgeTextSkins/judge_text_great_fast.png");
-            }
-            if (File.Exists(skinCollectionPath + "/JudgeTextSkins/judge_text_great_late.png"))
-            {
-                customSkin.Great_Late = SpriteLoader.Load(skinCollectionPath + "/JudgeTextSkins/judge_text_great_late.png");
-            }
-
-            if (File.Exists(skinCollectionPath + "/JudgeTextSkins/judge_text_good_fast.png"))
-            {
-                customSkin.Good_Fast = SpriteLoader.Load(skinCollectionPath + "/JudgeTextSkins/judge_text_good_fast.png");
-            }
-            if (File.Exists(skinCollectionPath + "/JudgeTextSkins/judge_text_good_late.png"))
-            {
-                customSkin.Good_Late = SpriteLoader.Load(skinCollectionPath + "/JudgeTextSkins/judge_text_good_late.png");
-            }
-
-
-            await UniTask.Yield();
-            customSkin.CriticalPerfect_Shine = SpriteLoader.Load(skinCollectionPath + "/JudgeTextSkins/judge_text_cPerfect_break.png");
-            customSkin.Break_2600_Shine = SpriteLoader.Load(skinCollectionPath + "/JudgeTextSkins/judge_text_break_2600_shine.png");
-            customSkin.Perfect_Shine = SpriteLoader.Load(skinCollectionPath + "/JudgeTextSkins/judge_text_perfect_break.png");
-
-
-            foreach (var value in new int[] { 2600, 2550, 2500, 2000, 1500, 1250, 1000, 0 })
-            {
-                var path = $"{skinCollectionPath}/JudgeTextSkins/judge_text_break_{value}.png";
-                var _path = $"{skinCollectionPath}/JudgeTextSkins/judge_text_break_{value}_fast.png";
-                var __path = $"{skinCollectionPath}/JudgeTextSkins/judge_text_break_{value}_late.png";
-                var type = typeof(CustomSkin);
-                type.GetProperty($"Break_{value}").SetValue(customSkin, SpriteLoader.Load(path));
-                if (value == 0)
-                {
-                    continue;
-                }
-                if (File.Exists(_path))
-                {
-                    type.GetProperty($"Break_{value}_Fast").SetValue(customSkin, SpriteLoader.Load(_path));
-                }
-                if (File.Exists(__path))
-                {
-                    type.GetProperty($"Break_{value}_Late").SetValue(customSkin, SpriteLoader.Load(__path));
-                }
-                await UniTask.Yield();
-            }
-
-            customSkin.Fast = SpriteLoader.Load(skinCollectionPath + "/JudgeTextSkins/fast.png");
-            customSkin.Late = SpriteLoader.Load(skinCollectionPath + "/JudgeTextSkins/late.png");
-
-            await UniTask.Yield();
-            customSkin.Touch = SpriteLoader.Load(skinCollectionPath + "/TouchSkins/touch.png");
-            customSkin.Touch_Each = SpriteLoader.Load(skinCollectionPath + "/TouchSkins/touch_each.png");
-            customSkin.Touch_Break = SpriteLoader.Load(skinCollectionPath + "/TouchSkins/touch_break.png");
-            customSkin.TouchPoint = SpriteLoader.Load(skinCollectionPath + "/TouchSkins/touch_point.png");
-            customSkin.TouchPoint_Each = SpriteLoader.Load(skinCollectionPath + "/TouchSkins/touch_point_each.png");
-            customSkin.TouchPoint_Break = SpriteLoader.Load(skinCollectionPath + "/TouchSkins/touch_break_point.png");
-
-            customSkin.TouchJust = SpriteLoader.Load(skinCollectionPath + "/TouchSkins/touch_just.png");
-
-            await UniTask.Yield();
-            customSkin.TouchBorder[0] = SpriteLoader.Load(skinCollectionPath + "/TouchSkins/touch_border_2.png");
-            customSkin.TouchBorder[1] = SpriteLoader.Load(skinCollectionPath + "/TouchSkins/touch_border_3.png");
-            customSkin.TouchBorder_Each[0] = SpriteLoader.Load(skinCollectionPath + "/TouchSkins/touch_border_2_each.png");
-            customSkin.TouchBorder_Each[1] = SpriteLoader.Load(skinCollectionPath + "/TouchSkins/touch_border_3_each.png");
-            customSkin.TouchBorder_Break[0] = SpriteLoader.Load(skinCollectionPath + "/TouchSkins/touch_break_border_2.png");
-            customSkin.TouchBorder_Break[1] = SpriteLoader.Load(skinCollectionPath + "/TouchSkins/touch_break_border_3.png");
+            builder.Add("TouchSkins/touch_border_2.png", s => TouchBorder[0] = s);
+            builder.Add("TouchSkins/touch_border_3.png", s => TouchBorder[1] = s);
+            builder.Add("TouchSkins/touch_border_2_each.png", s => TouchBorder_Each[0] = s);
+            builder.Add("TouchSkins/touch_border_3_each.png", s => TouchBorder_Each[1] = s);
+            builder.Add("TouchSkins/touch_break_border_2.png", s => TouchBorder_Break[0] = s);
+            builder.Add("TouchSkins/touch_break_border_3.png", s => TouchBorder_Break[1] = s);
+            builder.Add("TouchSkins/touch_mine_border_2.png", s => TouchBorder_Mine[0] = s);
+            builder.Add("TouchSkins/touch_mine_border_3_mine.png", s => TouchBorder_Mine[1] = s);
+            builder.Add("TouchSkins/touch_break_mine_border_2.png", s => TouchBorder_Break_Mine[0] = s);
+            builder.Add("TouchSkins/touch_break_mine_border_3.png", s => TouchBorder_Break_Mine[1] = s);
 
             for (var i = 0; i < 4; i++)
             {
-                customSkin.TouchHold[i] = SpriteLoader.Load(skinCollectionPath + "/TouchHoldSkins/touchhold_" + i + ".png");
-                customSkin.TouchHold_Break[i] = SpriteLoader.Load(skinCollectionPath + "/TouchHoldSkins/touchhold_break_" + i + ".png");
-                await UniTask.Yield();
+                int index = i;
+                builder.Add($"TouchHoldSkins/touchhold_{index}.png", s => TouchHold[index] = s);
+                builder.Add($"TouchHoldSkins/touchhold_break_{index}.png", s => TouchHold_Break[index] = s);
+                builder.Add($"TouchHoldSkins/touchhold_mine_{index}.png", s => TouchHold_Mine[index] = s);
+                builder.Add($"TouchHoldSkins/touchhold_break_mine_{index}.png", s => TouchHold_Break_Mine[index] = s);
             }
-            await UniTask.Yield();
-            customSkin.TouchHold[4] = SpriteLoader.Load(skinCollectionPath + "/TouchHoldSkins/touchhold_border.png");
-            customSkin.TouchHold_Break[4] = SpriteLoader.Load(skinCollectionPath + "/TouchHoldSkins/touchhold_break_border.png");
-            customSkin.TouchHold_Off = SpriteLoader.Load(skinCollectionPath + "/TouchHoldSkins/touchhold_off.png");
+            builder.Add("TouchHoldSkins/touchhold_border.png", s => TouchHold[4] = s);
+            builder.Add("TouchHoldSkins/touchhold_break_border.png", s => TouchHold_Break[4] = s);
+            builder.Add("TouchHoldSkins/touchhold_off.png", s => TouchHold_Off = s);
 
-            customSkin.LoadingSplash = SpriteLoader.Load(skinCollectionPath + "/now_loading.png");
+            builder.Add("NoteGuideSkins/Normal.png", s => TapLine_Normal = s);
+            builder.Add("NoteGuideSkins/Each.png", s => TapLine_Each = s);
+            builder.Add("NoteGuideSkins/Slide.png", s => TapLine_Slide = s);
+            builder.Add("NoteGuideSkins/Break.png", s => TapLine_Break = s);
+            builder.Add("NoteGuideSkins/Mine.png", s => TapLine_Mine = s);
 
-            await UniTask.Yield();
-            customSkin.TapLine_Normal = SpriteLoader.Load(skinCollectionPath + "/NoteGuideSkins/Normal.png");
-            customSkin.TapLine_Each = SpriteLoader.Load(skinCollectionPath + "/NoteGuideSkins/Each.png");
-            customSkin.TapLine_Slide = SpriteLoader.Load(skinCollectionPath + "/NoteGuideSkins/Slide.png");
-            customSkin.TapLine_Break = SpriteLoader.Load(skinCollectionPath + "/NoteGuideSkins/Break.png");
+            for (var i = 0; i < 4; i++)
+            {
+                int index = i;
+                builder.Add($"NoteGuideSkins/EachLine{index + 1}.png", s => EachLines[index] = s);
+            }
 
-            await UniTask.Yield();
-            customSkin.EachLines[0] = SpriteLoader.Load(skinCollectionPath + "/NoteGuideSkins/EachLine1.png");
-            customSkin.EachLines[1] = SpriteLoader.Load(skinCollectionPath + "/NoteGuideSkins/EachLine2.png");
-            customSkin.EachLines[2] = SpriteLoader.Load(skinCollectionPath + "/NoteGuideSkins/EachLine3.png");
-            customSkin.EachLines[3] = SpriteLoader.Load(skinCollectionPath + "/NoteGuideSkins/EachLine4.png");
+            builder.Add("NoteGuideSkins/Hold_End.png", s => HoldEndPoint_Normal = s);
+            builder.Add("NoteGuideSkins/Hold_Each_End.png", s => HoldEndPoint_Each = s);
+            builder.Add("NoteGuideSkins/Hold_Break_End.png", s => HoldEndPoint_Break = s);
+            builder.Add("NoteGuideSkins/Hold_Mine_End.png", s => HoldEndPoint_Mine = s);
+        }
 
-            await UniTask.Yield();
-            customSkin.HoldEndPoint_Normal = SpriteLoader.Load(skinCollectionPath + "/NoteGuideSkins/Hold_End.png");
-            customSkin.HoldEndPoint_Each = SpriteLoader.Load(skinCollectionPath + "/NoteGuideSkins/Hold_Each_End.png");
-            customSkin.HoldEndPoint_Break = SpriteLoader.Load(skinCollectionPath + "/NoteGuideSkins/Hold_Break_End.png");
+        private void ProcessFallbacks()
+        {
+            Hold_On ??= Hold;
+            Hold_Each_On ??= Hold_Each;
+            Hold_Break_On ??= Hold_Break;
+        }
 
-            customSkin.IsLoaded = true;
+        // --- 直接加载独立的图片 ---
 
-            return customSkin;
+        /// <summary>
+        /// Loads an image outside the atlas, reading and decoding it on the thread pool.
+        /// </summary>
+        /// <param name="subPath">The image path relative to the skin directory.</param>
+        /// <returns>The outlined sprite, or null when the file is missing or cannot be decoded.</returns>
+        /// <exception cref="IOException">Reading the file failed.</exception>
+        private async UniTask<Sprite?> LoadSpriteDirectAsync(string subPath)
+        {
+            var file = RequireDirectory().FindFileAt(subPath);
+            if (file is null)
+            {
+                return null;
+            }
+
+            await UniTask.SwitchToThreadPool();
+            using var image = DecodeIndependent(file, subPath);
+            await UniTask.SwitchToMainThread();
+            return image is null ? null : CreateIndependentSprite(image, subPath);
+        }
+
+        /// <summary>
+        /// Loads an image outside the atlas on the calling (main) thread.
+        /// </summary>
+        /// <param name="subPath">The image path relative to the skin directory.</param>
+        /// <returns>The outlined sprite, or null when the file is missing or cannot be decoded.</returns>
+        /// <exception cref="IOException">Reading the file failed.</exception>
+        private Sprite? LoadSpriteDirectSync(string subPath)
+        {
+            var file = RequireDirectory().FindFileAt(subPath);
+            if (file is null)
+            {
+                return null;
+            }
+
+            using var image = DecodeIndependent(file, subPath);
+            return image is null ? null : CreateIndependentSprite(image, subPath);
+        }
+
+        /// <summary>
+        /// Reads and decodes an image into native memory. Safe off the main thread.
+        /// </summary>
+        /// <param name="file">The image file.</param>
+        /// <param name="subPath">The image path, for diagnostics.</param>
+        /// <returns>The decoded pixels, or null when the image cannot be decoded.</returns>
+        /// <exception cref="IOException">Reading the file failed.</exception>
+        private static DecodedImage? DecodeIndependent(StorageFile file, string subPath)
+        {
+            using var encoded = EncodedImage.Open(file);
+            var image = encoded.Decode();
+            if (image is null)
+            {
+                MajDebug.LogWarning(nameof(CustomSkin), $"Skin image '{subPath}' could not be decoded; it is left unassigned.");
+            }
+            return image;
+        }
+
+        /// <summary>
+        /// Uploads decoded pixels to their own texture and creates an outlined sprite from them.
+        /// </summary>
+        /// <param name="image">The decoded pixels.</param>
+        /// <param name="name">The sprite name.</param>
+        /// <returns>The sprite, which owns its non-readable texture.</returns>
+        private static Sprite CreateIndependentSprite(DecodedImage image, string name)
+        {
+            // Keep the texture readable until the custom outline has been installed.
+            var texture = image.ToTexture2D(false);
+            Sprite? sprite = null;
+            try
+            {
+                // The outline reads the native decoded pixels; no texture data is copied to the managed heap.
+                sprite = AtlasBuilder.CreateOutlinedSprite(texture,
+                    new Rect(0, 0, texture.width, texture.height), image.Pixels,
+                    image.Width, image.Height, name, default,
+                    SpriteOutlineSnap, SpriteOutlineDetail, SpriteAlphaTolerance);
+                texture.Apply(updateMipmaps: false, makeNoLongerReadable: true);
+                return sprite;
+            }
+            catch
+            {
+                if (sprite != null) UnityEngine.Object.DestroyImmediate(sprite, true);
+                UnityEngine.Object.DestroyImmediate(texture, true);
+                throw;
+            }
+        }
+
+        private void LoadBreakSetToBuilder(AtlasBuilder builder, int value, Action<Sprite?> normal, Action<Sprite?>? fast, Action<Sprite?>? late)
+        {
+            builder.Add($"JudgeTextSkins/judge_text_break_{value}.png", normal);
+            if (value != 0 && fast != null && late != null)
+            {
+                builder.Add($"JudgeTextSkins/judge_text_break_{value}_fast.png", fast);
+                builder.Add($"JudgeTextSkins/judge_text_break_{value}_late.png", late);
+            }
+        }
+
+        private Sprite? SafeDestroyIndependent(Sprite? sprite)
+        {
+            if (sprite != null && sprite != _dummySprite)
+            {
+                var tex = sprite.texture;
+                UnityEngine.Object.DestroyImmediate(sprite, true);
+                if (tex != null) UnityEngine.Object.DestroyImmediate(tex, true);
+            }
+            return null;
+        }
+
+        private Sprite? SafeDestroyAtlasSprite(Sprite? sprite)
+        {
+            if (sprite != null && sprite != _dummySprite) UnityEngine.Object.DestroyImmediate(sprite, true);
+            return null;
+        }
+
+        private void SafeDestroyAtlasSpriteArray(Sprite?[]? arr)
+        {
+            if (arr == null) return;
+            for (int i = 0; i < arr.Length; i++) arr[i] = SafeDestroyAtlasSprite(arr[i]);
+        }
+    }
+
+    /// <summary>
+    /// Builds one sprite atlas from a skin directory with bounded memory: image headers are read first so that the
+    /// atlas is allocated once at its final size, then the sources are decoded and copied into it one at a time.
+    /// Peak memory is the atlas plus a single decoded source, independent of the number of sources.
+    /// </summary>
+    public class AtlasBuilder
+    {
+        private struct SpriteTask
+        {
+            public string SubPath;
+            public Action<Sprite?> Assigner;
+            public Vector4 Border;
+        }
+
+        /// <summary>
+        /// Pairs a queued sprite with its file and, once read, its encoded bytes in native memory.
+        /// </summary>
+        private struct AtlasSource
+        {
+            /// <summary>
+            /// The queued sprite.
+            /// </summary>
+            public SpriteTask Task;
+
+            /// <summary>
+            /// The source file.
+            /// </summary>
+            public StorageFile File;
+
+            /// <summary>
+            /// The encoded image with its header dimensions, or null before it is read.
+            /// </summary>
+            public EncodedImage? Image;
+        }
+
+        /// <summary>
+        /// Holds the transparent gap between packed sprites, in atlas pixels.
+        /// </summary>
+        private const int AtlasPadding = 2;
+
+        private readonly List<SpriteTask> _tasks = new();
+        private readonly List<Sprite> _sprites = new();
+        internal IEnumerable<Sprite> Sprites => _sprites;
+        private readonly StorageDirectory _directory;
+        private readonly float _outlineSnap;
+        private readonly float _outlineDetail;
+        private readonly byte _alphaTolerance;
+
+        /// <param name="outlineSnap">Outline grid size in source pixels. Values below 1 disable snapping.</param>
+        /// <param name="outlineDetail">Detail in [0, 1]; higher values retain more vertices.
+        /// This is a runtime approximation, not Unity Editor's internal outline algorithm.</param>
+        /// <param name="alphaTolerance">Pixels with alpha at or below this value are transparent.</param>
+        /// <param name="directory">The skin collection directory whose relative sprite paths are resolved through its backend.</param>
+        public AtlasBuilder(StorageDirectory directory, float outlineSnap = 1f, float outlineDetail = 1f, byte alphaTolerance = 0)
+        {
+            _directory = directory;
+            _outlineSnap = Mathf.Max(0f, outlineSnap);
+            _outlineDetail = Mathf.Clamp01(outlineDetail);
+            _alphaTolerance = alphaTolerance;
+        }
+
+
+        public void Add(string subPath, Action<Sprite?> assigner, Vector4 border = default)
+        {
+            _tasks.Add(new SpriteTask
+            {
+                SubPath = subPath,
+                Assigner = assigner,
+                Border = border
+            });
+        }
+
+        /// <summary>
+        /// Builds the atlas and assigns every queued sprite. File reads and decoding run on the thread pool;
+        /// atlas writes and sprite creation run on the main thread.
+        /// </summary>
+        /// <returns>The atlas shared by the assigned sprites, or null when no queued image could be read.</returns>
+        /// <exception cref="InvalidOperationException">The images cannot be packed within the device's texture limit.</exception>
+        /// <exception cref="IOException">Reading a source file failed.</exception>
+        public async UniTask<Texture2D?> BuildAndAssignAsync()
+        {
+            await UniTask.SwitchToMainThread();
+            using var candidates = FindSources();
+            try
+            {
+                await UniTask.SwitchToThreadPool();
+                OpenSources(candidates);
+                await UniTask.SwitchToMainThread();
+                using var sources = SelectReadableSources(candidates);
+                if (sources.Count == 0)
+                {
+                    return null;
+                }
+
+                var layout = CreateLayout(sources);
+                var atlas = CreateAtlas(layout);
+                try
+                {
+                    for (var i = 0; i < sources.Count; i++)
+                    {
+                        await UniTask.SwitchToThreadPool();
+                        using var image = DecodeSource(sources[i]);
+                        await UniTask.SwitchToMainThread();
+                        PlaceSource(atlas, layout[i], sources[i], image);
+                    }
+                    return CompleteAtlas(atlas);
+                }
+                catch
+                {
+                    // A decode failure surfaces on the thread pool; Unity objects are destroyed on the main thread.
+                    await UniTask.SwitchToMainThread();
+                    DestroyPartialAtlas(atlas);
+                    throw;
+                }
+            }
+            finally
+            {
+                CloseSources(candidates);
+            }
+        }
+
+        /// <summary>
+        /// Builds the atlas and assigns every queued sprite on the calling (main) thread.
+        /// </summary>
+        /// <returns>The atlas shared by the assigned sprites, or null when no queued image could be read.</returns>
+        /// <exception cref="InvalidOperationException">The images cannot be packed within the device's texture limit.</exception>
+        /// <exception cref="IOException">Reading a source file failed.</exception>
+        public Texture2D? BuildAndAssign()
+        {
+            using var candidates = FindSources();
+            try
+            {
+                OpenSources(candidates);
+                using var sources = SelectReadableSources(candidates);
+                if (sources.Count == 0)
+                {
+                    return null;
+                }
+
+                var layout = CreateLayout(sources);
+                var atlas = CreateAtlas(layout);
+                try
+                {
+                    for (var i = 0; i < sources.Count; i++)
+                    {
+                        using var image = DecodeSource(sources[i]);
+                        PlaceSource(atlas, layout[i], sources[i], image);
+                    }
+                    return CompleteAtlas(atlas);
+                }
+                catch
+                {
+                    DestroyPartialAtlas(atlas);
+                    throw;
+                }
+            }
+            finally
+            {
+                CloseSources(candidates);
+            }
+        }
+
+        /// <summary>
+        /// Resolves every queued path, assigning null to sprites whose file does not exist.
+        /// </summary>
+        /// <returns>The existing sources, not yet read.</returns>
+        private PooledList<AtlasSource> FindSources()
+        {
+            _sprites.Clear();
+            var sources = new PooledList<AtlasSource>(_tasks.Count);
+            foreach (var task in _tasks)
+            {
+                var file = _directory.FindFileAt(task.SubPath);
+                if (file is null)
+                {
+                    task.Assigner(null);
+                    continue;
+                }
+                sources.Add(new AtlasSource { Task = task, File = file });
+            }
+            return sources;
+        }
+
+        /// <summary>
+        /// Reads each source's encoded bytes into native memory and its header dimensions,
+        /// without decoding pixels. Each file is opened once for the whole build. Safe off the main thread.
+        /// </summary>
+        /// <param name="sources">The sources to update in place.</param>
+        /// <exception cref="IOException">Reading a source file failed; sources read so far remain open for <see cref="CloseSources"/>.</exception>
+        private static void OpenSources(PooledList<AtlasSource> sources)
+        {
+            for (var i = 0; i < sources.Count; i++)
+            {
+                var source = sources[i];
+                source.Image = EncodedImage.Open(source.File);
+                sources[i] = source;
+            }
+        }
+
+        /// <summary>
+        /// Releases every source's encoded bytes. Safe to call more than once and off the main thread.
+        /// </summary>
+        /// <param name="sources">The sources to release.</param>
+        private static void CloseSources(PooledList<AtlasSource> sources)
+        {
+            foreach (var source in sources)
+            {
+                source.Image?.Dispose();
+            }
+        }
+
+        /// <summary>
+        /// Keeps the sources with supported headers, assigning null to the others.
+        /// </summary>
+        /// <param name="candidates">The sources after their headers were read.</param>
+        /// <returns>The sources to pack.</returns>
+        private static PooledList<AtlasSource> SelectReadableSources(PooledList<AtlasSource> candidates)
+        {
+            var sources = new PooledList<AtlasSource>(candidates.Count);
+            foreach (var source in candidates)
+            {
+                if (source.Image is { IsSupported: true })
+                {
+                    sources.Add(source);
+                    continue;
+                }
+                MajDebug.LogWarning(nameof(AtlasBuilder), $"Skin image '{source.Task.SubPath}' is not a supported image; it is left unassigned.");
+                source.Task.Assigner(null);
+            }
+            return sources;
+        }
+
+        /// <summary>
+        /// Lays out the sources within the device's texture limit.
+        /// </summary>
+        /// <param name="sources">The sources with supported headers.</param>
+        /// <returns>The layout, with slots in source order.</returns>
+        /// <exception cref="InvalidOperationException">The sources cannot be packed.</exception>
+        private static AtlasLayout CreateLayout(PooledList<AtlasSource> sources)
+        {
+            using var sizes = new PooledList<(int Width, int Height)>(sources.Count);
+            foreach (var source in sources)
+            {
+                sizes.Add((source.Image!.Width, source.Image.Height));
+            }
+            var maximumAtlasSize = Math.Min(8192, SystemInfo.maxTextureSize);
+            var layout = AtlasLayout.Create(sizes, AtlasPadding, maximumAtlasSize);
+            if (layout.Scale < 1.0)
+            {
+                MajDebug.LogWarning(nameof(AtlasBuilder), $"Skin images exceed a {maximumAtlasSize}-pixel atlas; scaling them by {layout.Scale:F3}.");
+            }
+            return layout;
+        }
+
+        /// <summary>
+        /// Allocates the atlas at its final size with a transparent base level.
+        /// </summary>
+        /// <param name="layout">The layout that determines the atlas size.</param>
+        /// <returns>A readable RGBA32 atlas with a full mipmap chain.</returns>
+        private static unsafe Texture2D CreateAtlas(AtlasLayout layout)
+        {
+            // Skip Unity's own initialization; only the base level is read before Apply regenerates the mipmaps.
+            var atlas = new Texture2D(layout.Width, layout.Height, TextureFormat.RGBA32, -1, false, true);
+            var pixels = atlas.GetPixelData<Color32>(0);
+            UnsafeUtility.MemClear(pixels.GetUnsafePtr(), (long)pixels.Length * UnsafeUtility.SizeOf<Color32>());
+            return atlas;
+        }
+
+        /// <summary>
+        /// Decodes one source and releases its encoded bytes. Safe off the main thread.
+        /// </summary>
+        /// <param name="source">The source to decode.</param>
+        /// <returns>The decoded pixels, or null when the image is corrupt.</returns>
+        private static DecodedImage? DecodeSource(AtlasSource source)
+        {
+            using var encoded = source.Image!;
+            return encoded.Decode();
+        }
+
+        /// <summary>
+        /// Copies one decoded source into its slot and assigns its sprite.
+        /// </summary>
+        /// <param name="atlas">The readable atlas.</param>
+        /// <param name="slot">The source's slot in the atlas.</param>
+        /// <param name="source">The queued source.</param>
+        /// <param name="image">The decoded source, or null when decoding failed.</param>
+        private void PlaceSource(Texture2D atlas, AtlasSlot slot, AtlasSource source, DecodedImage? image)
+        {
+            if (image is null)
+            {
+                MajDebug.LogWarning(nameof(AtlasBuilder), $"Skin image '{source.Task.SubPath}' could not be decoded; it is left unassigned.");
+                source.Task.Assigner(null);
+                return;
+            }
+
+            var sourcePixels = image.Pixels;
+            new CopyToAtlasJob
+            {
+                Source = sourcePixels,
+                SourceWidth = image.Width,
+                SourceHeight = image.Height,
+                Atlas = atlas.GetPixelData<Color32>(0),
+                AtlasWidth = atlas.width,
+                X = slot.X,
+                Y = slot.Y,
+                Width = slot.Width,
+                Height = slot.Height
+            }.Schedule(slot.Height, 16).Complete();
+
+            var rect = new Rect(slot.X, slot.Y, slot.Width, slot.Height);
+            var scaleX = rect.width / image.Width;
+            var scaleY = rect.height / image.Height;
+            var sourceBorder = source.Task.Border;
+            var border = new Vector4(sourceBorder.x * scaleX, sourceBorder.y * scaleY,
+                sourceBorder.z * scaleX, sourceBorder.w * scaleY);
+            var sprite = CreateOutlinedSprite(atlas, rect, sourcePixels, image.Width, image.Height,
+                source.Task.SubPath, border, _outlineSnap, _outlineDetail, _alphaTolerance);
+            source.Task.Assigner(sprite);
+            _sprites.Add(sprite);
+        }
+
+        /// <summary>
+        /// Generates the mipmaps, uploads the atlas and releases its CPU copy.
+        /// </summary>
+        /// <param name="atlas">The filled atlas.</param>
+        /// <returns>The same atlas, now non-readable.</returns>
+        private static Texture2D CompleteAtlas(Texture2D atlas)
+        {
+            // The atlas stays readable until every sprite and custom mesh exists.
+            atlas.Apply(updateMipmaps: true, makeNoLongerReadable: true);
+            return atlas;
+        }
+
+        /// <summary>
+        /// Releases the sprites created so far and the atlas after a failed build.
+        /// </summary>
+        /// <param name="atlas">The partially filled atlas.</param>
+        private void DestroyPartialAtlas(Texture2D atlas)
+        {
+            foreach (var sprite in _sprites)
+            {
+                UnityEngine.Object.DestroyImmediate(sprite, true);
+            }
+            _sprites.Clear();
+            UnityEngine.Object.DestroyImmediate(atlas, true);
+        }
+
+        /// <summary>
+        /// Creates a sprite on an atlas region with a custom outline mesh computed from the source pixels.
+        /// </summary>
+        /// <param name="texture">The texture the sprite samples.</param>
+        /// <param name="rect">The sprite's region in <paramref name="texture"/>.</param>
+        /// <param name="sourcePixels">The unscaled source pixels, row 0 being the bottom row.</param>
+        /// <param name="sourceWidth">The source width in pixels.</param>
+        /// <param name="sourceHeight">The source height in pixels.</param>
+        /// <param name="name">The sprite name.</param>
+        /// <param name="border">The nine-slice border in atlas pixels.</param>
+        /// <param name="snap">The outline grid size in source pixels.</param>
+        /// <param name="detail">The outline detail in [0, 1].</param>
+        /// <param name="alphaTolerance">Pixels with alpha at or below this value are transparent.</param>
+        /// <returns>The outlined sprite.</returns>
+        /// <exception cref="ArgumentException">The source dimensions do not match the pixels.</exception>
+        internal static Sprite CreateOutlinedSprite(Texture2D texture, Rect rect, NativeArray<Color32> sourcePixels,
+            int sourceWidth, int sourceHeight, string name, Vector4 border, float snap, float detail, byte alphaTolerance)
+        {
+            // Preserve the source's world size when the atlas downsizes it.
+            // Use the longer axis to minimize pixel-rounding error on thin textures.
+            var packedScale = sourceWidth >= sourceHeight
+                ? rect.width / sourceWidth
+                : rect.height / sourceHeight;
+            var pixelsPerUnit = 100f * packedScale;
+            // Polygon is an editor import mode, not a runtime SpriteMeshType.
+            // Tight supplies the initial mesh; OverrideGeometry installs our polygon mesh.
+            var sprite = Sprite.Create(texture, rect, new Vector2(0.5f, 0.5f), pixelsPerUnit, 0,
+                SpriteMeshType.FullRect, border, false);
+            try
+            {
+                sprite.name = name;
+                ApplyCustomOutline(sprite, sourcePixels, sourceWidth, sourceHeight, snap, detail, alphaTolerance);
+                return sprite;
+            }
+            catch
+            {
+                UnityEngine.Object.DestroyImmediate(sprite, true);
+                throw;
+            }
+        }
+
+        private static void ApplyCustomOutline(Sprite sprite, NativeArray<Color32> sourcePixels, int sourceWidth, int sourceHeight,
+            float snap, float detail, byte alphaTolerance)
+        {
+            using var points = new NativeList<float2>(128, Allocator.TempJob);
+            using var outlines = new NativeList<int2>(16, Allocator.TempJob);
+            var complete = BuildOutlines(sourcePixels, sourceWidth, sourceHeight,
+                snap, detail, alphaTolerance, points, outlines);
+            if (complete && outlines.Length == 0)
+            {
+                // Nothing exceeds the alpha threshold: emit no visible triangles.
+                sprite.OverrideGeometry(new Vector2[3], new ushort[] { 0, 1, 2 });
+                return;
+            }
+
+            if (!complete || !TryTriangulate(points, outlines, out var vertices, out var triangles))
+            {
+                // Never keep a partial mesh (which would hide disconnected regions).
+                MajDebug.LogWarning(nameof(AtlasBuilder), $"Custom outline too complex for sprite '{sprite.name}'; using its full rectangle.");
+                var rect = sprite.rect;
+                sprite.OverrideGeometry(new[] { Vector2.zero, new Vector2(rect.width, 0),
+                    new Vector2(rect.width, rect.height), new Vector2(0, rect.height) },
+                    new ushort[] { 0, 1, 2, 0, 2, 3 });
+                return;
+            }
+
+            // OverrideGeometry uses rect-local pixels, NOT pivot-relative world units.
+            // Scale for atlas resizing; never add the atlas rect's position.
+            var size = sprite.rect.size;
+            for (var i = 0; i < vertices.Length; i++)
+            {
+                vertices[i] = new Vector2(
+                    Mathf.Clamp01(vertices[i].x / sourceWidth) * size.x,
+                    Mathf.Clamp01(vertices[i].y / sourceHeight) * size.y);
+            }
+            sprite.OverrideGeometry(vertices, triangles);
+        }
+
+        private static unsafe bool BuildOutlines(NativeArray<Color32> pixels, int width, int height,
+    float snap, float detail, byte alphaTolerance, NativeList<float2> points, NativeList<int2> outlines)
+        {
+            var pixelCount = checked(width * height);
+            if (width <= 0 || height <= 0 || pixels.Length < pixelCount)
+                throw new ArgumentException("Invalid sprite pixel dimensions.");
+
+            // Four directed boundary bits per pixel, plus one completion byte, in native memory
+            // so large sprites do not allocate on the managed heap. The buffer is uninitialized;
+            // Execute overwrites EVERY used byte before reading.
+            using var edges = new NativeArray<byte>(checked(pixelCount + 1), Allocator.TempJob, NativeArrayOptions.UninitializedMemory);
+            using var loop = new NativeList<float2>(128, Allocator.TempJob);
+            using var cleaned = new NativeList<float2>(128, Allocator.TempJob);
+            using var snapped = new NativeList<float2>(128, Allocator.TempJob);
+            using var simplified = new NativeList<float2>(128, Allocator.TempJob);
+            using var keep = new NativeList<byte>(128, Allocator.TempJob);
+            using var pending = new NativeList<int2>(32, Allocator.TempJob);
+
+            // Run is deliberately synchronous: no job may outlive the edge buffer
+            // or the caller-owned pixel view. Do not Schedule this.
+            var edgeBits = (byte*)edges.GetUnsafePtr();
+            new OutlineJob
+            {
+                Pixels = pixels,
+                Width = width,
+                Height = height,
+                Snap = snap,
+                Tolerance = 4f * (1f - Mathf.Clamp01(detail)),
+                AlphaTolerance = alphaTolerance,
+                EdgeBits = edgeBits,
+                Points = points,
+                Outlines = outlines,
+                Loop = loop,
+                Cleaned = cleaned,
+                Snapped = snapped,
+                Simplified = simplified,
+                Keep = keep,
+                Pending = pending
+            }.Run();
+            return edgeBits[pixelCount] == 1;
+        }
+
+        [BurstCompile(FloatMode = FloatMode.Strict)]
+        private unsafe struct OutlineJob : IJob
+        {
+            [ReadOnly] public NativeArray<Color32> Pixels;
+            [NativeDisableUnsafePtrRestriction] public byte* EdgeBits;
+            public int Width, Height;
+            public float Snap, Tolerance;
+            public byte AlphaTolerance;
+            public NativeList<float2> Points, Loop, Cleaned, Snapped, Simplified;
+            public NativeList<int2> Outlines, Pending;
+            public NativeList<byte> Keep;
+
+            public void Execute()
+            {
+                Points.Clear();
+                Outlines.Clear();
+                var pixelCount = Width * Height;
+                EdgeBits[pixelCount] = 0;
+                for (var y = 0; y < Height; y++)
+                {
+                    for (var x = 0; x < Width; x++)
+                    {
+                        var mask = 0;
+                        if (Solid(x, y))
+                        {
+                            // East, north, west, south: solid pixels stay on the left.
+                            if (!Solid(x, y - 1)) mask |= 1;
+                            if (!Solid(x + 1, y)) mask |= 2;
+                            if (!Solid(x, y + 1)) mask |= 4;
+                            if (!Solid(x - 1, y)) mask |= 8;
+                        }
+                        EdgeBits[y * Width + x] = (byte)mask;
+                    }
+                }
+
+                for (var pixel = 0; pixel < pixelCount; pixel++)
+                {
+                    for (var direction = 0; direction < 4; direction++)
+                    {
+                        if ((EdgeBits[pixel] & (1 << direction)) == 0) continue;
+                        if (!Trace(pixel, direction)) return;
+                        ProcessLoop();
+                        // Match the tessellator's input budget; never emit a partial mesh.
+                        if (Points.Length > ushort.MaxValue / 2) return;
+                    }
+                }
+                EdgeBits[pixelCount] = 1;
+            }
+
+            private bool Solid(int x, int y) => (uint)x < (uint)Width && (uint)y < (uint)Height
+                && Pixels[y * Width + x].a > AlphaTolerance;
+
+            private static int2 Step(int direction)
+            {
+                switch (direction)
+                {
+                    case 0: return new int2(1, 0);
+                    case 1: return new int2(0, 1);
+                    case 2: return new int2(-1, 0);
+                    default: return new int2(0, -1);
+                }
+            }
+
+            private bool TryEdge(int2 vertex, int direction, out int pixel)
+            {
+                // Recover the owning solid pixel from a directed lattice edge.
+                var x = vertex.x - (direction == 1 || direction == 2 ? 1 : 0);
+                var y = vertex.y - (direction >= 2 ? 1 : 0);
+                pixel = -1;
+                if ((uint)x >= (uint)Width || (uint)y >= (uint)Height) return false;
+                pixel = y * Width + x;
+                return (EdgeBits[pixel] & (1 << direction)) != 0;
+            }
+
+            private bool Trace(int pixel, int direction)
+            {
+                Loop.Clear();
+                var first = new int2(pixel % Width, pixel / Width);
+                if (direction == 1 || direction == 2) first.x++;
+                if (direction >= 2) first.y++;
+                var vertex = first;
+                while (true)
+                {
+                    Loop.Add(new float2(vertex.x, vertex.y));
+                    EdgeBits[pixel] = (byte)(EdgeBits[pixel] & ~(1 << direction));
+                    vertex += Step(direction);
+                    if (math.all(vertex == first)) return true;
+
+                    // Prefer left, then straight, right, back. Diagonally touching
+                    // islands must remain separate, just as in the original tracer.
+                    var next = (direction + 1) & 3;
+                    if (!TryEdge(vertex, next, out pixel))
+                    {
+                        next = direction;
+                        if (!TryEdge(vertex, next, out pixel))
+                        {
+                            next = (direction + 3) & 3;
+                            if (!TryEdge(vertex, next, out pixel))
+                            {
+                                next = (direction + 2) & 3;
+                                if (!TryEdge(vertex, next, out pixel)) return false;
+                            }
+                        }
+                    }
+                    direction = next;
+                }
+            }
+
+            private void ProcessLoop()
+            {
+                RemoveCollinear(Loop, Cleaned);
+                Snapped.Clear();
+                for (var i = 0; i < Cleaned.Length; i++)
+                {
+                    var point = Cleaned[i];
+                    if (Snap >= 1f) point = math.round(point / Snap) * Snap;
+                    point = math.clamp(point, float2.zero, new float2(Width, Height));
+                    if (Snapped.Length == 0 || math.lengthsq(Snapped[Snapped.Length - 1] - point) > 0.0001f)
+                        Snapped.Add(point);
+                }
+                if (Snapped.Length > 1 && math.lengthsq(Snapped[0] - Snapped[Snapped.Length - 1]) < 0.0001f)
+                    Snapped.RemoveAt(Snapped.Length - 1);
+
+                // Loop is no longer needed; reuse its allocation for cleaned snapping.
+                RemoveCollinear(Snapped, Loop);
+                var source = Loop;
+                if (source.Length < 3 || SignedArea(source) * SignedArea(Cleaned) <= 0f) source = Cleaned;
+                SimplifyClosed(source);
+                var result = Simplified;
+                if (result.Length < 3 || SignedArea(result) * SignedArea(source) <= 0f) result = source;
+                var start = Points.Length;
+                for (var i = 0; i < result.Length; i++) Points.Add(result[i]);
+                Outlines.Add(new int2(start, result.Length));
+            }
+
+            private static void RemoveCollinear(NativeList<float2> source, NativeList<float2> destination)
+            {
+                destination.Clear();
+                for (var i = 0; i < source.Length; i++)
+                {
+                    var a = source[(i + source.Length - 1) % source.Length];
+                    var b = source[i];
+                    var c = source[(i + 1) % source.Length];
+                    var ab = b - a;
+                    var bc = c - b;
+                    var ac = c - a;
+                    if (source.Length < 3 || math.abs(ab.x * ac.y - ab.y * ac.x) > 0.0001f || math.dot(ab, bc) < 0f)
+                        destination.Add(b);
+                }
+            }
+
+            private void SimplifyClosed(NativeList<float2> source)
+            {
+                Simplified.Clear();
+                if (Tolerance <= 0f || source.Length < 4)
+                {
+                    for (var i = 0; i < source.Length; i++) Simplified.Add(source[i]);
+                    return;
+                }
+
+                var split = 1;
+                for (var i = 2; i < source.Length; i++)
+                    if (math.lengthsq(source[i] - source[0]) > math.lengthsq(source[split] - source[0])) split = i;
+                Keep.ResizeUninitialized(source.Length);
+                for (var i = 0; i < Keep.Length; i++) Keep[i] = 0;
+                Keep[0] = Keep[split] = 1;
+                Pending.Clear();
+                Pending.Add(new int2(0, split));
+                Pending.Add(new int2(split, source.Length));
+                while (Pending.Length > 0)
+                {
+                    var arc = Pending[Pending.Length - 1];
+                    Pending.RemoveAt(Pending.Length - 1);
+                    var a = source[arc.x];
+                    var line = source[arc.y % source.Length] - a;
+                    var lengthSquared = math.lengthsq(line);
+                    var furthest = -1;
+                    var maxDistance = Tolerance * Tolerance;
+                    for (var i = arc.x + 1; i < arc.y; i++)
+                    {
+                        var t = lengthSquared > 0f ? math.saturate(math.dot(source[i] - a, line) / lengthSquared) : 0f;
+                        var distance = math.lengthsq(source[i] - (a + t * line));
+                        if (distance <= maxDistance) continue;
+                        maxDistance = distance;
+                        furthest = i;
+                    }
+                    if (furthest < 0) continue;
+                    Keep[furthest] = 1;
+                    Pending.Add(new int2(arc.x, furthest));
+                    Pending.Add(new int2(furthest, arc.y));
+                }
+                for (var i = 0; i < source.Length; i++)
+                    if (Keep[i] != 0) Simplified.Add(source[i]);
+            }
+
+            private static float SignedArea(NativeList<float2> polygon)
+            {
+                double area = 0;
+                for (var i = 0; i < polygon.Length; i++)
+                {
+                    var a = polygon[i];
+                    var b = polygon[(i + 1) % polygon.Length];
+                    area += (double)a.x * b.y - (double)b.x * a.y;
+                }
+                return (float)(area * 0.5);
+            }
+        }
+
+
+        private static bool TryTriangulate(NativeList<float2> points, NativeList<int2> outlines,
+            out Vector2[] vertices, out ushort[] triangles)
+        {
+            vertices = Array.Empty<Vector2>();
+            triangles = Array.Empty<ushort>();
+            // Leave headroom for tessellator-generated intersection vertices.
+            if (points.Length > ushort.MaxValue / 2) return false;
+            // Vector Graphics consumes entire arrays, not count-limited spans. Pool
+            // rentals can be oversized, so these API-boundary arrays must be exact.
+            var contours = new BezierContour[outlines.Length];
+            for (var i = 0; i < outlines.Length; i++)
+            {
+                var range = outlines[i];
+                var segments = new BezierPathSegment[range.y];
+                for (var j = 0; j < range.y; j++)
+                {
+                    var p0 = points[range.x + j];
+                    var p1 = points[range.x + (j + 1) % range.y];
+                    var a = new Vector2(p0.x, p0.y);
+                    var b = new Vector2(p1.x, p1.y);
+                    segments[j] = new BezierPathSegment
+                    {
+                        P0 = a,
+                        P1 = Vector2.Lerp(a, b, 1f / 3f),
+                        P2 = Vector2.Lerp(a, b, 2f / 3f)
+                    };
+                }
+                contours[i] = new BezierContour { Segments = segments, Closed = true };
+            }
+            // The project already uses Unity Vector Graphics. Tessellate ALL contours
+            // together with odd-even filling so holes and nested islands remain correct.
+            var shape = new Shape
+            {
+                Contours = contours,
+                Fill = new SolidFill { Color = Color.white, Opacity = 1f, Mode = FillMode.OddEven },
+                IsConvex = false
+            };
+            var scene = new Scene
+            {
+                Root = new SceneNode { Transform = Matrix2D.identity, Shapes = new List<Shape> { shape } }
+            };
+            var options = new VectorUtils.TessellationOptions
+            {
+                StepDistance = float.MaxValue,
+                MaxCordDeviation = float.MaxValue,
+                MaxTanAngleDeviation = float.MaxValue,
+                SamplingStepSize = 1f
+            };
+            var geometry = VectorUtils.TessellateScene(scene, options, null);
+            long vertexCount = 0, indexCount = 0;
+            foreach (var part in geometry)
+            {
+                if (part.Indices.Length % 3 != 0) return false;
+                vertexCount += part.Vertices.Length;
+                indexCount += part.Indices.Length;
+                foreach (var index in part.Indices)
+                    if (index >= part.Vertices.Length) return false;
+            }
+            if (vertexCount < 3 || vertexCount > ushort.MaxValue || indexCount == 0 || indexCount > int.MaxValue)
+                return false;
+
+            if (geometry.Count == 1)
+            {
+                // A single part already has exact-size arrays with part-relative indices; use them without copying.
+                vertices = geometry[0].Vertices;
+                triangles = geometry[0].Indices;
+                return true;
+            }
+
+            // Allocate the final exact-size arrays once, without intermediate Lists
+            // or ToArray copies. OverrideGeometry also consumes the full array lengths.
+            vertices = new Vector2[(int)vertexCount];
+            triangles = new ushort[(int)indexCount];
+            var vertexOffset = 0;
+            var indexOffset = 0;
+            foreach (var part in geometry)
+            {
+                Array.Copy(part.Vertices, 0, vertices, vertexOffset, part.Vertices.Length);
+                foreach (var index in part.Indices)
+                    triangles[indexOffset++] = checked((ushort)(vertexOffset + index));
+                vertexOffset += part.Vertices.Length;
+            }
+            return true;
+        }
+
+        /// <summary>
+        /// Copies one source image into its atlas slot, resampling bilinearly when the slot is smaller.
+        /// Each index writes one slot row, so parallel rows never overlap.
+        /// </summary>
+        [BurstCompile(FloatMode = FloatMode.Strict)]
+        private struct CopyToAtlasJob : IJobParallelFor
+        {
+            /// <summary>
+            /// The source pixels, row 0 being the bottom row.
+            /// </summary>
+            [ReadOnly]
+            public NativeArray<Color32> Source;
+
+            /// <summary>
+            /// The atlas base level, row 0 being the bottom row.
+            /// </summary>
+            [WriteOnly]
+            [NativeDisableParallelForRestriction]
+            public NativeArray<Color32> Atlas;
+
+            /// <summary>
+            /// The source width in pixels.
+            /// </summary>
+            public int SourceWidth;
+
+            /// <summary>
+            /// The source height in pixels.
+            /// </summary>
+            public int SourceHeight;
+
+            /// <summary>
+            /// The atlas width in pixels.
+            /// </summary>
+            public int AtlasWidth;
+
+            /// <summary>
+            /// The slot's left edge in atlas pixels.
+            /// </summary>
+            public int X;
+
+            /// <summary>
+            /// The slot's bottom edge in atlas pixels.
+            /// </summary>
+            public int Y;
+
+            /// <summary>
+            /// The slot width in atlas pixels.
+            /// </summary>
+            public int Width;
+
+            /// <summary>
+            /// The slot height in atlas pixels.
+            /// </summary>
+            public int Height;
+
+            /// <summary>
+            /// Writes one slot row.
+            /// </summary>
+            /// <param name="row">The slot row, counted from the slot's bottom edge.</param>
+            public void Execute(int row)
+            {
+                var destination = (Y + row) * AtlasWidth + X;
+                if (Width == SourceWidth && Height == SourceHeight)
+                {
+                    var source = row * SourceWidth;
+                    for (var x = 0; x < Width; x++)
+                    {
+                        Atlas[destination + x] = Source[source + x];
+                    }
+                    return;
+                }
+
+                var ratio = new float2((float)SourceWidth / Width, (float)SourceHeight / Height);
+                for (var x = 0; x < Width; x++)
+                {
+                    var position = (new float2(x, row) + 0.5f) * ratio - 0.5f;
+                    var lower = math.max((int2)math.floor(position), int2.zero);
+                    var upper = math.min(lower + 1, new int2(SourceWidth - 1, SourceHeight - 1));
+                    var fraction = math.saturate(position - lower);
+                    var bottom = math.lerp(ToFloat(Source[lower.y * SourceWidth + lower.x]),
+                        ToFloat(Source[lower.y * SourceWidth + upper.x]), fraction.x);
+                    var top = math.lerp(ToFloat(Source[upper.y * SourceWidth + lower.x]),
+                        ToFloat(Source[upper.y * SourceWidth + upper.x]), fraction.x);
+                    var color = math.round(math.lerp(bottom, top, fraction.y));
+                    Atlas[destination + x] = new Color32((byte)color.x, (byte)color.y, (byte)color.z, (byte)color.w);
+                }
+            }
+
+            /// <summary>
+            /// Widens a colour for interpolation.
+            /// </summary>
+            /// <param name="color">The colour.</param>
+            /// <returns>The channels as floats in [0, 255].</returns>
+            private static float4 ToFloat(Color32 color)
+            {
+                return new float4(color.r, color.g, color.b, color.a);
+            }
         }
     }
 }

@@ -2,9 +2,11 @@
 
 ---
 
-# CubismUnityComponents
+# Cubism Unity Components
 
-Unity用のCubismSDKのオープンコンポーネントです。
+Unity用のCubism SDKのオープンコンポーネントです。
+
+モデルをロードするには Live2D Cubism Core と組み合わせて使用します。
 
 SDKパッケージのダウンロードページをお探しの場合は、[ダウンロードページ](https://www.live2d.com/download/cubism-sdk/download-unity/)にアクセスしてください。
 
@@ -15,6 +17,20 @@ SDKパッケージのダウンロードページをお探しの場合は、[ダ�
 ## お知らせ
 
 ご使用前に[お知らせ](NOTICE.ja.md)をお読みください。
+
+## Cubism 5.3新機能や過去バージョンとの互換性について
+
+本 SDK はCubism 5.3に対応した製品です。  
+Cubism 5.3 Editorに搭載された新機能のSDK対応については [こちら](https://docs.live2d.com/cubism-sdk-manual/cubism-5-3-new-functions/)をご確認ください。  
+過去バージョンのCubism SDKとの互換性については [こちら](https://docs.live2d.com/cubism-sdk-manual/compatibility-with-cubism-5-3/)をご確認ください。
+
+## 動作要件
+
+本 SDK は **Universal Render Pipeline（URP）** を前提としており、モデルの描画にはカスタムレンダーパスの利用が必要です。
+詳しくは[Cubism 5 SDK for Unity R4_1 以前との違い](https://docs.live2d.com/cubism-sdk-manual/differences-from-before-unity-r4_1/) や [Built-in Render PipelineからURPへの移行について](https://docs.live2d.com/cubism-sdk-manual/migration-from-birp-to-urp/) をご確認ください。
+なお**Built-in Render Pipeline** および **High Definition Render Pipeline（HDRP）** はサポートしておりません。
+
+**Input System** パッケージ（`com.unity.inputsystem`）との併用を想定しています。旧来の Input Manager のみのプロジェクトでは、Unity の手順に従い Input System の追加やプロジェクト設定の調整が必要になる場合があります。
 
 ## 構造
 
@@ -28,7 +44,7 @@ SDKパッケージのダウンロードページをお探しの場合は、[ダ�
 
 #### フレームワーク
 
-このグループのコンポーネントとクラスは、リップシンクやCubismの組み込み用ファイルとUnityの統合などの追加機能を提供します。CubismファイルをプレハブとAnimationClipに変換するのはここで行われます。すべてのフレームワークコードは`./Assets/Live2D/Cubism/Framework`にあります。
+このグループのコンポーネントとクラスは、リップシンクやCubismの組み込み用ファイルとUnityの統合などの追加機能を提供します。CubismファイルをプレハブとAnimationClipに変換する機能はここにあります。すべてのフレームワークコードは`./Assets/Live2D/Cubism/Framework`にあります。
 
 #### レンダリング
 
@@ -46,18 +62,17 @@ Unity Editor拡張機能は、`./Assets/Live2D/Cubism/Editor`にあります。
 
 | Unity | バージョン |
 | --- | --- |
-| Tech Stream | 2022.2.18f1 |
-| LTS | 2021.3.24f1 |
-| LTS | 2020.3.47f1 |
+| LTS | 6000.3.11f1 |
+| LTS | 6000.0.71f1 |
 
 | ライブラリ / ツール | バージョン |
 | --- | --- |
-| Android SDK / NDK | *1 |
-| Visual Studio 2022 | 17.5.5 |
-| Windows SDK | 10.0.22621.0 |
-| Xcode | 14.2 |
+| Android SDK / NDK | *2 |
+| Visual Studio 2022 | 17.14.29 |
+| Windows SDK | 10.0.26100.7705 |
+| Xcode | 26.3 |
 
-*1 Unityに組み込まれたライブラリまたは推奨ライブラリを使用してください。
+*2 Unityに組み込まれたライブラリまたは推奨ライブラリを使用してください。
 
 ### C#コンパイラ
 
@@ -73,17 +88,15 @@ https://docs.unity3d.com/ja/2018.4/Manual/CSharpCompiler.html
 
 | プラットフォーム | バージョン |
 | --- | --- |
-| Android | 13 |
-| iOS | 16.4.1 |
-| iPadOS | 16.4.1 |
-| Ubuntu | 20.04.6 |
-| macOS | 13.3.1 |
-| Windows 10 | 22H2 |
-| Google Chrome | 113.0.5672.93 |
-| Chrome OS 64bit (x86_64) | 113.0.5672.114 |
-| Chrome OS 32bit (ARMv8) (*2) | 113.0.5672.114 |
+| Android | 16 |
+| iOS | 26.4 |
+| iPadOS | 26.4 |
+| Ubuntu | 24.04.3 |
+| macOS | 26.4 |
+| Windows 11 | 25H2 (*4) |
+| Google Chrome | 146.0.7680.165 |
 
-*2 Android向けAPKファイルでの動作確認です。
+*4 UWP向けビルドは動作確認をしておりません。
 
 ## ブランチ
 
@@ -105,7 +118,7 @@ Coreラッパーでは、unsafeコードのブロックを許可する必要が�
 
 ### フォークとプルリクエスト
 
-修正、改善、さらには新機能をもたらすかどうかにかかわらず、プルリクエストに感謝します。ただし、ラッパーは可能な限り軽量で浅くなるように設計されているため、バグ修正とメモリ/パフォーマンスの改善のみを行う必要があることに注意してください。メインリポジトリを可能な限りクリーンに保つために、必要に応じて個人用フォークと機能ブランチを作成してください。
+修正、改善、さらには新機能をもたらすかどうかにかかわらず、プルリクエストに感謝します。メインリポジトリを可能な限りクリーンに保つために、必要に応じて個人用フォークと機能ブランチを作成してください。
 
 ### バグ
 
@@ -127,9 +140,9 @@ SDKの将来についてのフィードバックにも関心があります。Li
 - それ以外の場所ではLINQを使用せず、`foreach`よりも`for`を優先してください。
 - アクセス修飾子を明示的にするようにしてください。`void Update()`ではなく `private void Update()`を使いましょう。
 
-## コミュニティ
+## フォーラム
 
-ご不明な点がございましたら、公式のLive2Dコミュニティに参加して、他のユーザーと話し合ってください。
+ご不明な点がございましたら、公式のLive2Dフォーラムに参加して、他のユーザーと話し合ってください。
 
-- [Live2D 公式コミュニティ](https://creatorsforum.live2d.com/)
-- [Live2D community (English)](https://community.live2d.com/)
+- [Live2D 公式クリエイターズフォーラム](https://creatorsforum.live2d.com/)
+- [Live2D Creator's Forum(English)](https://community.live2d.com/)

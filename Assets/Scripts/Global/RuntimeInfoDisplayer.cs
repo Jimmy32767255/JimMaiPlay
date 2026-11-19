@@ -1,0 +1,153 @@
+using Cysharp.Text;
+using Cysharp.Threading.Tasks;
+using MajdataPlay.Diagnostics;
+using MajdataPlay.i18n;
+using MajdataPlay.Rendering;
+using MajdataPlay.Settings;
+using System;
+using TMPro;
+
+#nullable enable
+namespace MajdataPlay
+{
+    internal sealed class RuntimeInfoDisplayer : MajComponent
+    {
+        const string NEW_VERSION_AVAILABLE_I18N_KEY = "MAJTEXT_NEW_VERSION_AVAILABLE";
+        const float REFRESH_INTERVAL_SECONDS = 1f;
+
+        /// <summary>Places the diagnostics text after every scene UI material, including transition overlays (4000).</summary>
+        private const int FrontQueue = 4500;
+
+        readonly FrameTimingDiagnostics _frameTimingDiagnostics = new();
+        FPSMonitor _fpsMonitor = null!;
+        TextMeshProUGUI _textDisplayer = null!;
+        SystemSetting _setting = null!;
+
+        string _versionText = string.Empty;
+        string _newVersionAvailableText = string.Empty;
+        bool _hasNewVersionAvailable;
+        float _refreshTimer = REFRESH_INTERVAL_SECONDS;
+        TimeSpan _lastUpdateTiming = TimeSpan.Zero;
+
+        protected override void Awake()
+        {
+            base.Awake();
+            Majdata<RuntimeInfoDisplayer>.SetAsSingleton(this);
+            _fpsMonitor = GetComponent<FPSMonitor>();
+            _textDisplayer = GetComponent<TextMeshProUGUI>();
+            // 诊断文字必须压在所有场景 UI 之上；只改 TMP 的实例材质，不碰共享字体材质。
+            _textDisplayer.fontMaterial.renderQueue = FrontQueue;
+            _textDisplayer.SetMaterialDirty();
+            _textDisplayer.enabled = false;
+            _lastUpdateTiming = MajTimeline.UnscaledTime;
+            Localization.OnLanguageChanged += OnLanguageChanged;
+            enabled = false;
+        }
+
+        void OnDestroy()
+        {
+            Localization.OnLanguageChanged -= OnLanguageChanged;
+            if (ReferenceEquals(Majdata<RuntimeInfoDisplayer>.Instance, this))
+            {
+                Majdata<RuntimeInfoDisplayer>.Free();
+            }
+        }
+
+        internal void Init()
+        {
+            _setting = MajEnv.SystemSettings;
+            _versionText = MajInstances.GameVersion.ToString();
+            _textDisplayer.enabled = _setting.Rendering.DisplayRuntimeInfo;
+            enabled = true;
+            CheckForUpdateAsync().Forget();
+        }
+
+        void LateUpdate()
+        {
+            _textDisplayer.enabled = _setting.Rendering.DisplayRuntimeInfo;
+
+            var currentTime = MajTimeline.UnscaledTime;
+            var delta = currentTime - _lastUpdateTiming;
+            _lastUpdateTiming = currentTime;
+            TickFrameTimingDiagnostics(currentTime);
+            if (_refreshTimer > 0)
+            {
+                _refreshTimer -= (float)delta.TotalSeconds;
+                return;
+            }
+
+            RefreshText();
+            _refreshTimer = REFRESH_INTERVAL_SECONDS;
+        }
+
+        void RefreshText()
+        {
+            var averageFPS = _fpsMonitor.AverageFPS;
+            using var sb = ZString.CreateStringBuilder(true);
+            sb.AppendFormat("FPS <mspace=0.62em>{0,7:F2}</mspace>   1% ", averageFPS);
+            if (_fpsMonitor.TryGetOnePercentLowFPS(out var onePercentLowFPS))
+            {
+                sb.AppendFormat("<mspace=0.62em>{0,7:F2}</mspace>", onePercentLowFPS);
+            }
+            else
+            {
+                sb.Append("<mspace=0.62em>  --.--</mspace>");
+            }
+
+            sb.Append("   Ver. ");
+            sb.Append(_versionText);
+            if (_hasNewVersionAvailable)
+            {
+                sb.Append("   (");
+                sb.Append(_newVersionAvailableText);
+                sb.Append(')');
+            }
+
+            if (_setting.Debug.FrameTimingDiagnostics)
+            {
+                sb.Append('\n');
+                sb.Append(_frameTimingDiagnostics.OverlaySummary);
+            }
+
+            var text = sb.AsArraySegment();
+            _textDisplayer.SetCharArray(text.Array, text.Offset, text.Count);
+        }
+
+        /// <summary>Captures frame timings while the diagnostics option is on and discards them when it is turned off.</summary>
+        /// <param name="currentTime">The current unscaled time.</param>
+        void TickFrameTimingDiagnostics(TimeSpan currentTime)
+        {
+            if (!_setting.Debug.FrameTimingDiagnostics)
+            {
+                _frameTimingDiagnostics.Reset();
+                return;
+            }
+
+            _frameTimingDiagnostics.Tick(currentTime, VulkanLowLatencyVSync.LastWaitMilliseconds);
+        }
+
+        void OnLanguageChanged(object? sender, Language language)
+        {
+            if (!_hasNewVersionAvailable)
+            {
+                return;
+            }
+
+            _newVersionAvailableText = NEW_VERSION_AVAILABLE_I18N_KEY.i18n();
+            _refreshTimer = 0;
+        }
+
+        async UniTaskVoid CheckForUpdateAsync()
+        {
+            if (!await VersionChecker.IsNewVersionAvailableAsync())
+            {
+                return;
+            }
+
+            await UniTask.SwitchToMainThread();
+            _hasNewVersionAvailable = true;
+            _newVersionAvailableText = NEW_VERSION_AVAILABLE_I18N_KEY.i18n();
+            _refreshTimer = 0;
+        }
+    }
+}

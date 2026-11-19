@@ -7,6 +7,7 @@
 /[Oo]bj/
 /[Bb]uild/
 /[Bb]uilds/
+/untitled folder/
 /[Ll]ogs/
 /[Uu]ser[Ss]ettings/
 /[Ss]ongs/
@@ -15,8 +16,10 @@
 #/Assets/Plugin/
 /Assets/i18n
 /settings.json
+/system-settings.json
 /ModSettings.json
 /MajDatabase.db.db.db.db.db.db.db.db.db.db.db.db.db.db.db.db.db.db.db.db.db.db.db.db.db.db.db.db
+/MajScores.db
 # MemoryCaptures can get excessive in size.
 # They also could contain extremely sensitive data
 /[Mm]emoryCaptures/
@@ -79,6 +82,7 @@ crashlytics-build.properties
 /[Aa]ssets/[Ss]treamingAssets/aa/*
 #/[Aa]ssets/[Ss]treamingAssets/MaiCharts/*
 /[Aa]ssets/[Ss]treamingAssets/settings.json
+/[Aa]ssets/[Ss]treamingAssets/system-settings.json
 /[Aa]ssets/[Ss]prites/[Gg]ame/[Nn]otes/*
 /[Aa]ssets/[Ss]prites/[Gg]ame/[Tt]extSprites/*
 /MajPlayRuntime.log
@@ -95,3 +99,76 @@ out.log
 /ChartSetting.db
 /android-publish.keystore
 *.slnx
+/machine_description.json
+/ExtStreamingAssets
+
+/.idea/*
+/.continue/agents
+
+!/Tools/CSharp/AndroidJavaGenerator/AndroidJavaGenerator.csproj
+# .NET build output of the Tools/CSharp tools is always local.
+/Tools/CSharp/**/bin/
+/Tools/CSharp/**/obj/
+# CMake build trees of the Vulkan pacing layer are always local.
+/Tools/Native/VulkanPacing/.build/
+!/Tools/Tests/Modules/AndroidJavaGeneratorValidation/AndroidJavaGeneratorValidation.csproj
+/Assets/Plugins/MajdataPlay/Platform/Android/MajdataPlay.SourceGenerators.AndroidJava.dll.meta
+
+# Independent storage validation harness (not a Unity-generated project).
+!/Tools/Tests/Modules/FileSystemValidation/FileSystemValidation.csproj
+!/Tools/Tests/Modules/ChartStorageValidation/ChartStorageValidation.csproj
+!/Tools/Tests/Modules/ResourceStorageValidation/ResourceStorageValidation.csproj
+
+# Independent libcurl HTTP handler validation harness; builds into Temp/CurlValidation.
+!/Tools/Tests/Modules/CurlValidation/CurlValidation.csproj
+
+# Independent MRP camera capture bridge validation; builds into Temp/MrpCaptureValidation.
+!/Tools/Tests/Modules/MrpCaptureValidation/MrpCaptureValidation.csproj
+
+# Independent background material lifecycle validation; builds into Temp/BackgroundLifecycleValidation.
+!/Tools/Tests/Modules/BackgroundLifecycleValidation/BackgroundLifecycleValidation.csproj
+
+# Independent recorder lifecycle validation; builds into Temp/RecorderLifecycleValidation.
+!/Tools/Tests/Modules/RecorderLifecycleValidation/RecorderLifecycleValidation.csproj
+
+# Independent audio recorder output latency validation; builds into Temp/AudioRecorderLatencyValidation.
+!/Tools/Tests/Modules/AudioRecorderLatencyValidation/AudioRecorderLatencyValidation.csproj
+
+# Independent BASS HTTP stream validation harness; builds into Temp/BassHttpStreamValidation.
+!/Tools/Tests/Modules/BassHttpStreamValidation/BassHttpStreamValidation.csproj
+
+# Independent ManagedBass validation (library projects and CoreCLR runner); builds into Temp/ManagedBassValidation.
+!/Tools/Tests/Modules/ManagedBassValidation/ManagedBassValidation.csproj
+!/Tools/Tests/Modules/ManagedBassValidation/Libraries/*.csproj
+
+# Independent full Java API wrapper CLI and its validation harness.
+!/Tools/CSharp/AndroidJavaWrapperGenerator/AndroidJavaWrapperGenerator.csproj
+!/Tools/Tests/Modules/AndroidJavaWrapperGeneratorValidation/AndroidJavaWrapperGeneratorValidation.csproj
+/Tools/Tests/Modules/AndroidJavaWrapperGeneratorValidation/bin/
+/Tools/Tests/Modules/AndroidJavaWrapperGeneratorValidation/obj/
+/Tools/Tests/Modules/AndroidJavaWrapperGeneratorValidation/.work/
+
+# Generated Java bindings compile in an independent project before Unity imports its DLL.
+!/Tools/AndroidJavaWrapper/AndroidJavaWrapper.csproj
+/Tools/AndroidJavaWrapper/bin/
+/Tools/AndroidJavaWrapper/obj/
+/Tools/AndroidJavaWrapper/.work/
+/Tools/AndroidJavaWrapper/AndroidJavaWrapper.local.props
+/Tools/AndroidJavaWrapper/src/**/*.g.cs
+/Tools/AndroidJavaWrapper/src/AndroidJni.cs
+/Tools/AndroidJavaWrapper/src/IJavaObject.cs
+/Tools/AndroidJavaWrapper/src/JavaInvocationException.cs
+/Tools/AndroidJavaWrapper/src/JavaObjectReference.cs
+/Tools/AndroidJavaWrapper/src/java-wrappers.manifest.json
+/Tools/AndroidJavaWrapper/src/.java-wrappers.publication.json
+/Tools/AndroidJavaWrapper/src/JavaWrapperConverter.cs
+/Tools/AndroidJavaWrapper/src/JavaWrapperConverter.Exceptions.cs
+/Tools/AndroidJavaWrapper/src/AndroidJavaObjectExtensions.cs
+/Tools/AndroidJavaWrapper/src/JavaObjectExtensions.cs
+/Tools/AndroidJavaWrapper/src/**/*.meta
+!/Tools/AndroidJavaWrapper/src/**/*.e.cs.meta
+/Tools/CSharp/AndroidJavaWrapperGenerator/.work/
+/Tools/Tests/FFmpegValidation/bin
+/Tools/Tests/FFmpegValidation/obj
+/Runtime
+machine_description.json.bak

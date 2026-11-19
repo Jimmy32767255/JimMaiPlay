@@ -1,21 +1,31 @@
+#if UNITY_ANDROID && !UNITY_EDITOR
+#define ANDROID_RUNTIME
+#elif UNITY_IOS && !UNITY_EDITOR
+#define IOS_RUNTIME
+#elif UNITY_STANDALONE_WIN && !UNITY_EDITOR
+#define WINDOWS_RUNTIME
+#elif UNITY_STANDALONE_LINUX && !UNITY_EDITOR
+#define LINUX_RUNTIME
+#elif UNITY_STANDALONE_OSX && !UNITY_EDITOR
+#define OSX_RUNTIME
+#endif
 using AOT;
 using Cysharp.Threading.Tasks;
 using MajdataPlay.Collections;
 using MajdataPlay.i18n;
 using MajdataPlay.IO;
+using MajdataPlay.IO.Storage;
+using MajdataPlay.Rendering;
 using MajdataPlay.Scenes.Test;
 using MajdataPlay.Settings;
 using MajdataPlay.Timer;
-using ShimSkiaSharp;
-#if UNITY_STANDALONE_WIN
-using MajdataPlay.Platform.Win32;
-#elif UNITY_STANDALONE_OSX
+using MajdataPlay.Syscall.Win32;
+#if UNITY_STANDALONE_OSX
 using MajdataPlay.Platform.MacOS;
 #elif UNITY_IOS
 using MajdataPlay.Platform.iOS;
 #elif UNITY_ANDROID
 using MajdataPlay.Platform.Android;
-using MajdataPlay.Platform.Android.Runtime;
 #endif
 using System;
 using System.Collections.Concurrent;
@@ -24,151 +34,137 @@ using System.Diagnostics;
 using System.IO;
 using System.IO.Compression;
 using System.Linq;
-using System.Reflection;
-using System.Security.Cryptography;
 using System.Threading.Tasks;
-using Unity.VisualScripting;
 using UnityEngine;
-using UnityEngine.Networking;
 using UnityEngine.SceneManagement;
-using UnityEngine.Scripting; // DO NOT REMOVE IT !!!
+using UnityEngine.Scripting;
+using UnityEngine.Rendering;
+using MajdataPlay.Diagnostics;
+using MajdataPlay.Databases;
+using MajdataPlay.Import;
+using MajdataPlay.Recording;
+using MajdataPlay.ResourceUpdate;
+using System.Threading;
+using MajdataPlay.Utils; // DO NOT REMOVE IT !!!
 
 namespace MajdataPlay
 {
 #nullable enable
-    public sealed class GameManager : MajSingleton
+    [DontDestroyOnLoad]
+    public sealed class GameManager : MajComponent
     {
-#if UNITY_ANDROID
-        public delegate void OnActivityResultCallback(object? sender, int requestCode, int resultCode, AndroidJavaObject? intent);
-#endif
         public static bool IsAppOnFocus { get; private set; } = true;
         public static event EventHandler<EventArgs?>? OnAppQuit;
         public static event EventHandler<EventArgs?>? OnSave;
         public static event EventHandler<bool>? OnAppFocus;
         public static event EventHandler<bool>? OnAppPause;
-#if UNITY_ANDROID
-        public static event EventHandler<AndroidJavaObject?>? OnNewIntent;
-        public static event OnActivityResultCallback? OnActivityResult;
-        public static AndroidJavaClass UnityPlayerClass { get; private set; }
-        public static AndroidJavaClass MajdataPlayActivityClass { get; private set; }
 
-        public static AndroidJavaObject CurrentActivity { get; private set; }
-#endif
-        public static Camera MainCamera
+        /// <summary>
+        /// Gets the user settings, which are the same instance as <see cref="MajEnv.UserSettings"/>.
+        /// </summary>
+        public UserSetting UserSettings
         {
-            get => MajInstances.SceneSwitcher.MainCamera;
+            get => MajEnv.UserSettings;
         }
 
-        public GameSetting Settings
+        /// <summary>
+        /// Gets the system settings, which are the same instance as <see cref="MajEnv.SystemSettings"/>.
+        /// </summary>
+        public SystemSetting SystemSettings
         {
-            get => MajInstances.Settings;
+            get => MajEnv.SystemSettings;
         }
 
-        [SerializeField] BuiltInTimeProvider _timer = BuiltInTimeProvider.Winapi;
-        [SerializeField] Sprite _emptySongCover;
-        [SerializeField] Material _holdShineMaterial;
-        [SerializeField] Material _breakMaterial;
-        [SerializeField] Material _defaultMaterial;
+        public bool IsInited { get; private set; }
 
-        [SerializeField] bool _isEnterView = false;
-        [SerializeField] bool _isEnterTest = false;
 
-        readonly static List<IntPtr> _windowHandles = new();
-        readonly static ReadOnlyMemory<ITimeProvider> _builtInTimeProviders = MajTimeline.BuiltInTimeProviders;
+        [SerializeField] private BuiltInTimeProvider _timer = BuiltInTimeProvider.Winapi;
 
-#if UNITY_ANDROID
-        OnNewIntentCallbackProxy _onNewIntentCallbackProxy;
-        OnActivityResultCallbackProxy _onActivityResultCallbackProxy;
+        [SerializeField] private bool _isEnterView = false;
+        [SerializeField] private bool _isEnterTest = false;
+#if UNITY_EDITOR
+        /// <summary>
+        /// Gets or sets the path of a scene that Play Mode entered before the Init scene set up the global managers. Once
+        /// they are set up the game loads the skins, which the title scene would load, and then that scene again in view
+        /// mode instead of entering the title, so that editor-only scenes such as the slide test scene can be played
+        /// directly.
+        /// </summary>
+        internal static string? EditorReturnScenePath { get; set; }
 #endif
+
+        private static readonly List<IntPtr> _windowHandles = new();
+        private static readonly ReadOnlyMemory<ITimeProvider> _builtInTimeProviders = MajTimeline.BuiltInTimeProviders;
+
         protected override void Awake()
         {
             base.Awake();
-#if UNITY_ANDROID && !UNITY_EDITOR
-            UnityPlayerClass = new AndroidJavaClass("com.unity3d.player.UnityPlayer");
-            MajdataPlayActivityClass = new AndroidJavaClass("net.majdata.majdataplay.MajdataPlayActivity");
-            UnityEngine.Debug.Log("[Android]Get current activity");
-            CurrentActivity = UnityPlayerClass.GetStatic<AndroidJavaObject>("currentActivity");
-            UnityEngine.Debug.Log("[Android]Creating onNewIntent callback proxy");
-            _onNewIntentCallbackProxy = new(this);
-            UnityEngine.Debug.Log("[Android]Setting onNewIntent callback proxy");
-            MajdataPlayActivityClass.CallStatic("registerOnNewIntentCallback", _onNewIntentCallbackProxy);
-            _onActivityResultCallbackProxy = new(this);
-            UnityEngine.Debug.Log("[Android]Setting onActivityResult callback proxy");
-            MajdataPlayActivityClass.CallStatic("registerOnActivityResultCallback", _onActivityResultCallbackProxy);
-#endif
+            Majdata<GameManager>.SetAsSingleton(this);
+            GameRuntime.Init();
         }
-        void Start()
+        private void Start()
         {
             StartInternal().Forget();
         }
-        async UniTask StartInternal()
+        /// <summary>Extracts or checks the packaged resources of the current platform before any service reads them.</summary>
+        /// <param name="progress">Receives the extraction and check state of each step, which the loading screen shows.</param>
+        /// <param name="cancellationToken">Cancels the work, for example when the game manager is destroyed.</param>
+        /// <returns>An operation that completes once the resources are ready; failures are logged so that startup continues.</returns>
+        /// <remarks>
+        /// Android and iOS extract the packaged resources on the first start and check them against the packaged manifests
+        /// on later starts. Windows, Linux and macOS restore empty chart and skin roots from the packaged streaming assets
+        /// and read every other resource from them directly. The Editor skips the check.
+        /// </remarks>
+        /// <exception cref="OperationCanceledException">The token was cancelled.</exception>
+        private async UniTask CheckResourcesAsync(ProgressReporter progress, CancellationToken cancellationToken)
         {
-#if UNITY_IOS && !UNITY_EDITOR
-            IOSNativeSettings.Init();
-#endif
-            await UniTask.CompletedTask;
-            MajEnv.InitPath();
-            MajDebug.Init();
-            var s = "\n";
-            s += $"################ MajdataPlay Startup Check ################\n";
-            s += $"     OS       : {SystemInfo.operatingSystem}\n";
-            s += $"     Model    : {SystemInfo.deviceModel} - {SystemInfo.deviceType}\n";
-            s += $"     Processor: {SystemInfo.processorType}\n";
-            s += $"     Memory   : {SystemInfo.systemMemorySize} MB\n";
-            s +=
-                $"     Graphices: {SystemInfo.graphicsDeviceName} ({SystemInfo.graphicsMemorySize} MB) - {SystemInfo.graphicsDeviceType}\n";
-            s += $"################     Startup Check  End    ################";
-            MajDebug.LogInfo(s);
-            MajDebug.LogInfo($"PID: {MajEnv.GameProcess.Id}");
-            MajDebug.LogInfo($"Version: {MajInstances.GameVersion}");
-#if UNITY_ANDROID && !UNITY_EDITOR // Android Only (Sdk Version Log)
-            MajDebug.LogInfo($"AndroidSdkVersion: {MajEnv.AndroidSdkVersion}");
-            MajDebug.LogInfo($"TargetSdkVersion: {MajEnv.TargetSdkVersion}");
-            using var packageManager = CurrentActivity.Call<AndroidJavaObject>("getPackageManager");
-            var packageName = CurrentActivity.Call<string>("getPackageName");
-            using var packageInfo = packageManager.Call<AndroidJavaObject>("getPackageInfo", packageName, 0);
-            var androidVersionCode = 0L;
-            if(MajEnv.AndroidSdkVersion >= 28)
+            var budget = new FrameBudget();
+            try
             {
-                androidVersionCode = packageInfo.Call<long>("getLongVersionCode");
-            }
-            else
-            {
-                androidVersionCode = packageInfo.Get<int>("versionCode");
-            }
-            MajDebug.LogInfo($"AndroidVerCode: {androidVersionCode}");
+#if ANDROID_RUNTIME || IOS_RUNTIME
+                if (!MajEnv.AssetsDirectory.Exists)
+                {
+                    await MobileResourceImporter.ImportAsync(progress, budget, cancellationToken);
+                }
+                else
+                {
+                    await MobileResourceChecker.CheckAsync(progress, budget, cancellationToken);
+                }
+#elif WINDOWS_RUNTIME || LINUX_RUNTIME || OSX_RUNTIME
+                await DesktopResourceChecker.CheckAsync(progress, budget, cancellationToken);
+#else
+                await UniTask.CompletedTask;
 #endif
-            MajEnv.Init();
+            }
+            catch (Exception exception) when (exception is not OperationCanceledException)
+            {
+                MajDebug.LogError(nameof(GameManager), $"Resource check failed:\n{exception}");
+            }
+        }
+        private async UniTask StartInternal()
+        {
 #if !UNITY_EDITOR
-#if UNITY_ANDROID
-            AndroidKeyboard.Init();
-            var intent = CurrentActivity.Call<AndroidJavaObject>("getIntent");
-            ChartImporter.Android_OnNewIntent(this, intent);
-            OnNewIntent += ChartImporter.Android_OnNewIntent;
-#elif UNITY_IOS
+#if UNITY_IOS
             await UniTask.DelayFrame(2); // wait UnitySendMessage
 #endif
 #endif
+            await UniTask.Yield();
+            var sceneSwitcher = MajInstances.SceneSwitcher;
+            await sceneSwitcher.FadeInAsync();
+            // Show each extraction and check step on the loading screen as soon as it is reported.
+            var resourceProgress = new ProgressReporter(report => sceneSwitcher.SetLoadingText(report.ToString()));
+            try
+            {
+                await CheckResourcesAsync(resourceProgress, this.GetCancellationTokenOnDestroy());
+            }
+            finally
+            {
+                sceneSwitcher.SetLoadingText(string.Empty);
+            }
             await ChartImporter.OnStartAsync();
-#if UNITY_ANDROID || UNITY_IOS
-            if (!Directory.Exists(MajEnv.AssetsPath))
-            {
-                ExtractAssets();
-                MoveCharts();
-                MoveSkins();
-            }
-            else
-            {
-                SyncMissingAssets();
-                RestoreManagedAssetsIfMissing();
-            }
-#elif UNITY_STANDALONE_WIN && !UNITY_EDITOR
-            RestoreManagedAssetsIfMissing();
-#endif
 #if UNITY_STANDALONE
             DiscordManager.Init();
 #endif
-            MajInstances.FPSDisplayer.Init();
+            MajInstances.RuntimeInfoDisplayer.Init();
             MajInstances.AudioManager.Init();
             Localization.Init();
 #if UNITY_STANDALONE_WIN
@@ -192,7 +188,7 @@ namespace MajdataPlay
                 if (arg == "--view-mode")
                 {
                     MajEnv.Mode = RunningMode.View;
-                    Settings.Mod.AutoPlay = AutoplayModeOption.Enable;
+                    SystemSettings.Mod.AutoPlay = AutoplayModeOption.Enable;
                     break;
                 }
             }
@@ -205,13 +201,13 @@ namespace MajdataPlay
             else if (_isEnterView)
             {
                 MajEnv.Mode = RunningMode.View;
-                Settings.Mod.AutoPlay = AutoplayModeOption.Enable;
+                SystemSettings.Mod.AutoPlay = AutoplayModeOption.Enable;
             }
 #endif
 
             ApplyScreenConfig();
-#if UNITY_STANDALONE_OSX && !UNITY_EDITOR
-            if (Settings.Debug.FullScreen && MajEnv.Mode != RunningMode.View)
+#if OSX_RUNTIME
+            if (SystemSettings.Rendering.FullScreen && MajEnv.Mode != RunningMode.View)
             {
                 await ApplyMacOSFullscreenAsync();
             }
@@ -220,50 +216,62 @@ namespace MajdataPlay
             var availableLangs = Localization.Available;
             if (!availableLangs.IsEmpty())
             {
-                if(string.IsNullOrEmpty(Settings.Display.Language))
+                if (string.IsNullOrEmpty(UserSettings.Display.Language))
                 {
-                    if(Localization.SetLangByCode(Application.systemLanguage.ToLocale()))
+                    if (Localization.SetLangByCode(Application.systemLanguage.ToLocale()))
                     {
-                        Settings.Display.Language = Localization.Current.ToString();
+                        UserSettings.Display.Language = Localization.Current.ToString();
                     }
                 }
                 else
                 {
-                    var lang = availableLangs.Find(x => x.ToString() == Settings.Display.Language);
+                    var lang = availableLangs.Find(x => x.ToString() == UserSettings.Display.Language);
                     if (lang is null)
                     {
                         lang = availableLangs.First();
-                        Settings.Display.Language = lang.ToString();
+                        UserSettings.Display.Language = lang.ToString();
                     }
 
                     Localization.Current = lang;
-                }  
+                }
             }
 
-            var envType = typeof(MajEnv);
-
-            envType.GetField("<EmptySongCover>k__BackingField", BindingFlags.Static | BindingFlags.NonPublic)
-                .SetValue(null, _emptySongCover);
-            envType.GetField("<BreakMaterial>k__BackingField", BindingFlags.Static | BindingFlags.NonPublic)
-                .SetValue(null, _breakMaterial);
-            envType.GetField("<DefaultMaterial>k__BackingField", BindingFlags.Static | BindingFlags.NonPublic)
-                .SetValue(null, _defaultMaterial);
-            envType.GetField("<HoldShineMaterial>k__BackingField", BindingFlags.Static | BindingFlags.NonPublic)
-                .SetValue(null, _holdShineMaterial);
-            QualitySettings.SetQualityLevel((int)Settings.Display.RenderQuality, true);
-#if !(UNITY_ANDROID || UNITY_IOS)
-            QualitySettings.vSyncCount = Settings.Display.VSync ? 1 : 0;
+            ApplyDisplaySettings();
+#if UNITY_EDITOR || !(UNITY_ANDROID || UNITY_IOS)
+            QualitySettings.vSyncCount = SystemSettings.Rendering.VSync ? 1 : 0;
 #endif
-            QualitySettings.maxQueuedFrames = Settings.Debug.MaxQueuedFrames;
+            QualitySettings.maxQueuedFrames = SystemSettings.Debug.MaxQueuedFrames;
+            VulkanLowLatencyVSync.Install();
             DetectHWEncoder();
 #if (!UNITY_EDITOR && UNITY_STANDALONE_WIN)
-            if (Settings.Display.Topmost)
+            if (SystemSettings.Rendering.Topmost)
             {
                 SetWindowTopmost();
             }
 #endif
-
+            IODetector.Init();
             InputManager.Init(Majdata<DummyTouchPanelRenderer>.Instance!.InstanceID2SensorIndexMappingTable);
+            OutputManager.Init();
+            Recorder.Init();
+
+            IsInited = true;
+#if UNITY_EDITOR
+            if (EditorReturnScenePath is string returnScenePath)
+            {
+                EditorReturnScenePath = null;
+                MajEnv.Mode = RunningMode.View;
+                // 平时由标题场景加载皮肤，这里跳过了标题场景，所以先加载皮肤
+                if (!MajInstances.SkinManager.IsInited)
+                {
+                    await MajInstances.SkinManager.InitAsync();
+                }
+                // 这个场景不一定在构建设置里，所以按路径加载
+                UnityEditor.SceneManagement.EditorSceneManager.LoadSceneInPlayMode(returnScenePath, new LoadSceneParameters(LoadSceneMode.Single));
+                await MajInstances.SceneSwitcher.FadeOutAsync();
+                return;
+            }
+#endif
+            await UniTask.Delay(1000);
             if (MajEnv.Mode == RunningMode.Test)
             {
                 EnterTestMode();
@@ -276,10 +284,9 @@ namespace MajdataPlay
             {
                 EnterTitle();
             }
-            await MajInstances.SceneSwitcher.FadeOutAsync();
         }
 
-        void DetectHWEncoder()
+        private void DetectHWEncoder()
         {
             var deviceName = SystemInfo.graphicsDeviceName.ToLower();
             HardwareEncoder encoder;
@@ -300,10 +307,7 @@ namespace MajdataPlay
                 encoder = HardwareEncoder.None;
             }
 
-            var envType = typeof(MajEnv);
-
-            envType.GetField("<HWEncoder>k__BackingField", BindingFlags.Static | BindingFlags.NonPublic)
-                .SetValue(null, encoder);
+            MajEnv.HWEncoder = encoder;
         }
 #if (!UNITY_EDITOR && UNITY_STANDALONE_WIN)
         void SetWindowTopmost()
@@ -320,7 +324,7 @@ namespace MajdataPlay
 #endif
 #if UNITY_STANDALONE_WIN
         [MonoPInvokeCallback(typeof(Win32API.EnumWindowsProc))]
-        static bool EnumWindowsCallback(IntPtr hWnd, int lParam)
+        private static bool EnumWindowsCallback(IntPtr hWnd, int lParam)
         {
             _windowHandles.Clear();
             Win32API.GetWindowThreadProcessId(hWnd, out int processId);
@@ -332,37 +336,86 @@ namespace MajdataPlay
             return true;
         }
 #endif
-        void EnterTestMode()
+        private void EnterTestMode()
         {
             IOListener.NextScene = "Title";
 #if UNITY_STANDALONE_WIN && ENABLE_MONO
             MajEnv.GameProcess.PriorityClass = ProcessPriorityClass.AboveNormal;
 #endif
-            SceneManager.LoadScene("Test");
+            MajInstances.SceneSwitcher.SwitchScene("Test");
         }
 
-        void EnterTitle()
+        private void EnterTitle()
         {
 #if UNITY_STANDALONE_WIN && ENABLE_MONO
             MajEnv.GameProcess.PriorityClass = ProcessPriorityClass.AboveNormal;
 #endif
-            SceneManager.LoadScene("Title");
+            MajInstances.SceneSwitcher.SwitchScene("Title");
         }
 
-        void EnterView()
+        private void EnterView()
         {
 #if UNITY_STANDALONE_WIN && ENABLE_MONO
             MajEnv.GameProcess.PriorityClass = ProcessPriorityClass.BelowNormal;
 #endif
-            SceneManager.LoadScene("View");
+            MajInstances.SceneSwitcher.SwitchScene("View");
+        }
+        private void ApplyDisplaySettings()
+        {
+            var renderingOptions = MajEnv.SystemSettings.Rendering;
+            ApplyRenderingSettings();
+#if UNITY_STANDALONE || UNITY_EDITOR
+            QualitySettings.vSyncCount = renderingOptions.VSync ? 1 : 0;
+#endif
+            SetFrameRate(renderingOptions.FPSLimit);
         }
 
-        public void ApplyScreenConfig()
+        public static void SetFrameRate(int fps)
         {
-#if UNITY_STANDALONE_WIN || UNITY_STANDALONE_OSX
+            Application.targetFrameRate = fps;
+#if ANDROID_RUNTIME
+            AndroidRuntime.SetFrameRate(fps);
+#endif
+        }
+
+        internal static void ApplyRenderingSettings()
+        {
+            // Unity Quality 仅保留 Default 引擎基线；菜单预设不再索引多个质量资产。
+            // 不为切换 MSAA / 纹理采样精度反复重建整个管线。
+            const int UnityDefaultQualityLevel = 0;
+            int baseline = Mathf.Min(UnityDefaultQualityLevel, QualitySettings.names.Length - 1);
+            if (baseline >= 0 && QualitySettings.GetQualityLevel() != baseline)
+                QualitySettings.SetQualityLevel(baseline, true);
+            var parameters = MajEnv.SystemSettings.Rendering.GetEffectiveParameters();
+            UiOutlineTheme.Configure(MajEnv.SystemSettings.Rendering.GetEffectiveUIOutlineMode());
+            UiPvBackdropBlur.Configure(MajEnv.SystemSettings.Rendering.GetEffectiveUIBackdropBlur(), MajEnv.SystemSettings.Rendering.GetEffectiveUIBackdropStyle());
+            // 保留完整 mip 链；纹理精度是采样 LOD 的 +0/+1/+2，而不是最高可用 mip 的下限。
+            if (QualitySettings.globalTextureMipmapLimit != 0)
+                QualitySettings.globalTextureMipmapLimit = 0;
+            if (GraphicsSettings.currentRenderPipeline is MajRenderPipelineAsset pipeline)
+                pipeline.ConfigureRuntimeRendering(parameters.RenderScale / 100f,
+                    (MajMSAAMode)parameters.MSAASamples, parameters.ResolveToScreen, parameters.MipmapBias);
+#if UNITY_ANDROID && !UNITY_EDITOR
+            // 两个比例独立相乘；兼容模式暂时恢复原系统缓冲。
+            MajAndroidDisplayResolution.Configure(GraphicsSettings.currentRenderPipeline is MajRenderPipelineAsset
+                && !MajEnv.SystemSettings.Rendering.CompatibilityMode
+                ? MajEnv.SystemSettings.Rendering.SystemResolutionScaling : 100);
+#endif
+#if UNITY_STANDALONE || UNITY_EDITOR
+            // SetQualityLevel 会应用资产的 VSync 值，同步方式继续尊重独立显示选项。
+            QualitySettings.vSyncCount = MajEnv.SystemSettings.Rendering.VSync ? 1 : 0;
+#endif
+        }
+
+        private void ApplyScreenConfig()
+        {
+            // Editor 的输出尺寸由 Game View / Device Simulator 决定，不能套用桌面保存的分辨率。
+            // Simulator 会把请求的 9:16 画面铺到所选设备上，导致长屏纵向、宽屏横向拉伸。
+            // 桌面 Player 保留原来的分辨率与全屏设置；MRP RenderScale 和 FPS 仍独立生效。
+#if (UNITY_STANDALONE_WIN || UNITY_STANDALONE_OSX) && !UNITY_EDITOR
             if (MajEnv.Mode != RunningMode.View)
             {
-                var fullScreen = Settings.Debug.FullScreen;
+                var fullScreen = SystemSettings.Rendering.FullScreen;
 #if UNITY_STANDALONE_OSX
                 Screen.fullScreen = fullScreen;
                 Screen.fullScreenMode = fullScreen
@@ -373,7 +426,7 @@ namespace MajdataPlay
                 Screen.fullScreenMode = FullScreenMode.ExclusiveFullScreen;
 #endif
 
-                var resolution = Settings.Display.Resolution.ToLower();
+                var resolution = SystemSettings.Rendering.Resolution.ToLower();
 #if UNITY_STANDALONE_OSX
                 if (!fullScreen && resolution is not "auto")
 #else
@@ -395,7 +448,6 @@ namespace MajdataPlay
                 }
             }
 #endif
-            Application.targetFrameRate = Settings.Display.FPSLimit;
         }
 
 #if UNITY_STANDALONE_OSX && !UNITY_EDITOR
@@ -406,14 +458,17 @@ namespace MajdataPlay
         }
 #endif
 
-        void Update()
+        private void Update()
         {
+#if UNITY_ANDROID && !UNITY_EDITOR
+            MajAndroidDisplayResolution.Tick();
+#endif
             ChangeTimerIfRequested();
             ChartImporter.OnUpdate();
         }
 
         [Conditional("DEBUG")]
-        void ChangeTimerIfRequested()
+        private void ChangeTimerIfRequested()
         {
             var builtInTimeProviders = _builtInTimeProviders.Span;
             var selectedTimer = builtInTimeProviders[(int)_timer];
@@ -432,7 +487,7 @@ namespace MajdataPlay
         {
             GC.Collect();
 #if (UNITY_ANDROID || UNITY_IOS) && !UNITY_EDITOR //Android/iOS Only (GC Enable)
-            GarbageCollector.GCMode = GarbageCollector.Mode.Enabled;
+            UnityEngine.Scripting.GarbageCollector.GCMode = UnityEngine.Scripting.GarbageCollector.Mode.Enabled;
             MajDebug.LogWarning("GC has been enabled");
 #endif
         }
@@ -440,7 +495,7 @@ namespace MajdataPlay
         {
             GC.Collect();
 #if (UNITY_ANDROID || UNITY_IOS) && !UNITY_EDITOR //Android/iOS Only (GC Disable)
-            GarbageCollector.GCMode = GarbageCollector.Mode.Disabled;
+            UnityEngine.Scripting.GarbageCollector.GCMode = UnityEngine.Scripting.GarbageCollector.Mode.Disabled;
             MajDebug.LogWarning("GC has been disabled");
 #endif
         }
@@ -459,12 +514,11 @@ namespace MajdataPlay
             }
         }
         #region Events
-        protected override void OnDestroy()
+        private void OnApplicationQuit()
         {
-            base.OnDestroy();
-        }
-        void OnApplicationQuit()
-        {
+#if UNITY_ANDROID && !UNITY_EDITOR
+            MajAndroidDisplayResolution.Restore();
+#endif
             Screen.sleepTimeout = SleepTimeout.SystemSetting;
             RequestSave(this);
             try
@@ -481,9 +535,16 @@ namespace MajdataPlay
             OnAppQuit = null;
             OnSave = null;
         }
-        void OnApplicationFocus(bool focus)
+        private void OnApplicationFocus(bool focus)
         {
             IsAppOnFocus = focus;
+#if ANDROID_RUNTIME
+            // PowerKeeper may reload its per-game refresh policy while we are in the background.
+            if (focus)
+            {
+                SetFrameRate(SystemSettings.Rendering.FPSLimit);
+            }
+#endif
             if (OnAppFocus is not null)
             {
                 OnAppFocus(this, focus);
@@ -496,8 +557,11 @@ namespace MajdataPlay
 #endif
         }
 
-        void OnApplicationPause(bool pause)
+        private void OnApplicationPause(bool pause)
         {
+#if UNITY_ANDROID && !UNITY_EDITOR
+            if (!pause) MajAndroidDisplayResolution.RequestRefresh();
+#endif
             if (OnAppPause is not null)
             {
                 OnAppPause(this, pause);
@@ -509,650 +573,14 @@ namespace MajdataPlay
             }
 #endif
         }
-#if UNITY_ANDROID
-        [Preserve]
-        void Android_OnNewIntent(AndroidJavaObject intent)
-        {
-            if (OnNewIntent is not null)
-            {
-                OnNewIntent(this, intent);
-            }
-        }
-        [Preserve]
-        void Android_OnActivityResult(int requestCode, int resultCode, AndroidJavaObject? intent)
-        {
-            if (OnActivityResult is not null)
-            {
-                OnActivityResult(this, requestCode, resultCode, intent);
-            }
-        }
-#elif UNITY_IOS
+
+#if UNITY_IOS
         [Preserve]
         public void IOS_OnFileOpen(string tempFilePath)
         {
             ChartImporter.AddImportTask(tempFilePath);
         }
 #endif
-#endregion
-        
-        #region Asset Extraction
-        private static string[] GetStreamingAssetRelativePaths(bool ignoreRootManagedAssets)
-        {
-            var paths = Resources.Load<TextAsset>("StreamingAssetPaths");
-            if (paths == null)
-            {
-                MajDebug.LogError("StreamingAssetPaths not found in Resources.");
-                return Array.Empty<string>();
-            }
-
-            return paths.text
-                        .Replace("\\", "/")
-                        .Split('\n')
-                        .Select(x => x.Trim())
-                        .Where(x => x.Length != 0)
-                        .Where(x => !ignoreRootManagedAssets ||
-                                    (!x.StartsWith("MaiCharts/", StringComparison.OrdinalIgnoreCase) &&
-                                     !x.StartsWith("Skins/", StringComparison.OrdinalIgnoreCase)))
-                        .ToArray();
-        }
-        private static void ExtractAssets()
-        {
-            var relativePaths = GetStreamingAssetRelativePaths(ignoreRootManagedAssets: false);
-            if (relativePaths.Length == 0)
-            {
-                return;
-            }
-#if UNITY_IOS
-            var extractRoot = Path.Combine(MajEnv.RootPath, "ExtStreamingAssets/");
-            Directory.CreateDirectory(extractRoot);
-            foreach (var line in relativePaths)
-            {
-                var srcPath = Path.Combine(Application.streamingAssetsPath, line);
-                var dstPath = Path.Combine(extractRoot, line);
-                var dstDir = Path.GetDirectoryName(dstPath);
-                if (!string.IsNullOrEmpty(dstDir)) Directory.CreateDirectory(dstDir);
-                MajDebug.LogInfo($"Extracting(iOS direct): {srcPath} -> {dstPath}");
-
-                try
-                {
-                    var data = File.ReadAllBytes(srcPath);
-                    if (data.Length == 0)
-                    {
-                        MajDebug.LogError($"Extract failed(iOS): empty data: {line}\nsrc={srcPath}");
-                        continue;
-                    }
-
-                    File.WriteAllBytes(dstPath, data);
-                }
-                catch (Exception e)
-                {
-                    MajDebug.LogError($"Extract failed(iOS): {line}\nsrc={srcPath}\n{e}");
-                }
-            }
-#elif UNITY_ANDROID
-            var extractRoot = Path.Combine(MajEnv.RootPath, "ExtStreamingAssets");
-            Directory.CreateDirectory(extractRoot);
-            foreach (var line in relativePaths)
-            {
-                var srcUrl = Path.Combine(Application.streamingAssetsPath, line).Replace("\\", "/");
-
-                var dstPath = Path.Combine(extractRoot, line);
-                var dstDir = Path.GetDirectoryName(dstPath);
-                if (!string.IsNullOrEmpty(dstDir))
-                    Directory.CreateDirectory(dstDir);
-
-                MajDebug.LogInfo($"Extracting(Android jar sync): {srcUrl} -> {dstPath}");
-
-                try
-                {
-                    using var req = UnityWebRequest.Get(srcUrl);
-                    req.downloadHandler = new DownloadHandlerBuffer();
-                    var op = req.SendWebRequest();
-                    while (!op.isDone)
-                    {
-                        System.Threading.Thread.Sleep(1);
-                    }
-
-                    if (req.result != UnityWebRequest.Result.Success)
-                    {
-                        MajDebug.LogError($"Extract failed(Android): {line}\nsrc={srcUrl}\nerr={req.error}");
-                        continue;
-                    }
-
-                    var data = req.downloadHandler.data;
-                    if (data == null || data.Length == 0)
-                    {
-                        MajDebug.LogError($"Extract failed(Android): empty data: {line}\nsrc={srcUrl}");
-                        continue;
-                    }
-
-                    File.WriteAllBytes(dstPath, data);
-                }
-                catch (Exception e)
-                {
-                    MajDebug.LogError($"Extract failed(Android): {line}\nsrc={srcUrl}\n{e}");
-                }
-            }
-#endif
-        }
-        private static void SyncMissingAssets()
-        {
-            var relativePaths = GetStreamingAssetRelativePaths(ignoreRootManagedAssets: true);
-            if (relativePaths.Length == 0)
-            {
-                return;
-            }
-#if UNITY_IOS
-            var extractRoot = Path.Combine(MajEnv.RootPath, "ExtStreamingAssets/");
-            Directory.CreateDirectory(extractRoot);
-            foreach (var line in relativePaths)
-            {
-                var dstPath = Path.Combine(extractRoot, line);
-                if (File.Exists(dstPath))
-                {
-                    continue;
-                }
-
-                var srcPath = Path.Combine(Application.streamingAssetsPath, line);
-                var dstDir = Path.GetDirectoryName(dstPath);
-                if (!string.IsNullOrEmpty(dstDir)) Directory.CreateDirectory(dstDir);
-                MajDebug.LogInfo($"Sync missing(iOS): {srcPath} -> {dstPath}");
-
-                try
-                {
-                    var data = File.ReadAllBytes(srcPath);
-                    if (data.Length == 0)
-                    {
-                        MajDebug.LogError($"Sync missing failed(iOS): empty data: {line}\nsrc={srcPath}");
-                        continue;
-                    }
-
-                    File.WriteAllBytes(dstPath, data);
-                }
-                catch (Exception e)
-                {
-                    MajDebug.LogError($"Sync missing failed(iOS): {line}\nsrc={srcPath}\n{e}");
-                }
-            }
-#elif UNITY_ANDROID
-            var extractRoot = Path.Combine(MajEnv.RootPath, "ExtStreamingAssets");
-            Directory.CreateDirectory(extractRoot);
-            foreach (var line in relativePaths)
-            {
-                var dstPath = Path.Combine(extractRoot, line);
-                if (File.Exists(dstPath))
-                {
-                    continue;
-                }
-
-                var srcUrl = Path.Combine(Application.streamingAssetsPath, line).Replace("\\", "/");
-                var dstDir = Path.GetDirectoryName(dstPath);
-                if (!string.IsNullOrEmpty(dstDir))
-                    Directory.CreateDirectory(dstDir);
-
-                MajDebug.LogInfo($"Sync missing(Android): {srcUrl} -> {dstPath}");
-
-                try
-                {
-                    using var req = UnityWebRequest.Get(srcUrl);
-                    req.downloadHandler = new DownloadHandlerBuffer();
-                    var op = req.SendWebRequest();
-                    while (!op.isDone)
-                    {
-                        System.Threading.Thread.Sleep(1);
-                    }
-
-                    if (req.result != UnityWebRequest.Result.Success)
-                    {
-                        MajDebug.LogError($"Sync missing failed(Android): {line}\nsrc={srcUrl}\nerr={req.error}");
-                        continue;
-                    }
-
-                    var data = req.downloadHandler.data;
-                    if (data == null || data.Length == 0)
-                    {
-                        MajDebug.LogError($"Sync missing failed(Android): empty data: {line}\nsrc={srcUrl}");
-                        continue;
-                    }
-
-                    File.WriteAllBytes(dstPath, data);
-                }
-                catch (Exception e)
-                {
-                    MajDebug.LogError($"Sync missing failed(Android): {line}\nsrc={srcUrl}\n{e}");
-                }
-            }
-#endif
-        }
-        private static void RestoreManagedAssetsIfMissing()
-        {
-            var chartRootMissing = !Directory.EnumerateFileSystemEntries(MajEnv.ChartPath).Any();
-            var skinRootMissing = !Directory.EnumerateFileSystemEntries(MajEnv.SkinPath).Any();
-            if (!chartRootMissing && !skinRootMissing)
-            {
-                return;
-            }
-
-            var relativePaths = GetStreamingAssetRelativePaths(ignoreRootManagedAssets: false);
-            if (relativePaths.Length == 0)
-            {
-                return;
-            }
-
-            if (chartRootMissing)
-            {
-                RestoreManagedAssetGroup("MaiCharts/", MajEnv.ChartPath, relativePaths);
-            }
-
-            if (skinRootMissing)
-            {
-                RestoreManagedAssetGroup("Skins/", MajEnv.SkinPath, relativePaths);
-            }
-        }
-        private static void RestoreManagedAssetGroup(string sourcePrefix, string destinationRoot, IReadOnlyList<string> relativePaths)
-        {
-            var targetPaths = relativePaths.Where(x => x.StartsWith(sourcePrefix, StringComparison.OrdinalIgnoreCase))
-                                           .ToArray();
-            if (targetPaths.Length == 0)
-            {
-                return;
-            }
-
-            Directory.CreateDirectory(destinationRoot);
-
-#if UNITY_IOS
-            foreach (var line in targetPaths)
-            {
-                var relativePath = line.Substring(sourcePrefix.Length);
-                var srcPath = Path.Combine(Application.streamingAssetsPath, line);
-                var dstPath = Path.Combine(destinationRoot, relativePath);
-                var dstDir = Path.GetDirectoryName(dstPath);
-                if (!string.IsNullOrEmpty(dstDir)) Directory.CreateDirectory(dstDir);
-                MajDebug.LogInfo($"Restore managed asset(iOS): {srcPath} -> {dstPath}");
-
-                try
-                {
-                    var data = File.ReadAllBytes(srcPath);
-                    if (data.Length == 0)
-                    {
-                        MajDebug.LogError($"Restore managed asset failed(iOS): empty data: {line}\nsrc={srcPath}");
-                        continue;
-                    }
-
-                    File.WriteAllBytes(dstPath, data);
-                }
-                catch (Exception e)
-                {
-                    MajDebug.LogError($"Restore managed asset failed(iOS): {line}\nsrc={srcPath}\n{e}");
-                }
-            }
-#elif UNITY_ANDROID
-            foreach (var line in targetPaths)
-            {
-                var relativePath = line.Substring(sourcePrefix.Length);
-                var srcUrl = Path.Combine(Application.streamingAssetsPath, line).Replace("\\", "/");
-                var dstPath = Path.Combine(destinationRoot, relativePath);
-                var dstDir = Path.GetDirectoryName(dstPath);
-                if (!string.IsNullOrEmpty(dstDir))
-                    Directory.CreateDirectory(dstDir);
-
-                MajDebug.LogInfo($"Restore managed asset(Android): {srcUrl} -> {dstPath}");
-
-                try
-                {
-                    using var req = UnityWebRequest.Get(srcUrl);
-                    req.downloadHandler = new DownloadHandlerBuffer();
-                    var op = req.SendWebRequest();
-                    while (!op.isDone)
-                    {
-                        System.Threading.Thread.Sleep(1);
-                    }
-
-                    if (req.result != UnityWebRequest.Result.Success)
-                    {
-                        MajDebug.LogError($"Restore managed asset failed(Android): {line}\nsrc={srcUrl}\nerr={req.error}");
-                        continue;
-                    }
-
-                    var data = req.downloadHandler.data;
-                    if (data == null || data.Length == 0)
-                    {
-                        MajDebug.LogError($"Restore managed asset failed(Android): empty data: {line}\nsrc={srcUrl}");
-                        continue;
-                    }
-
-                    File.WriteAllBytes(dstPath, data);
-                }
-                catch (Exception e)
-                {
-                    MajDebug.LogError($"Restore managed asset failed(Android): {line}\nsrc={srcUrl}\n{e}");
-                }
-            }
-#elif UNITY_STANDALONE_WIN
-            foreach (var line in targetPaths)
-            {
-                var relativePath = line.Substring(sourcePrefix.Length);
-                var srcPath = Path.Combine(Application.streamingAssetsPath, line);
-                var dstPath = Path.Combine(destinationRoot, relativePath);
-                var dstDir = Path.GetDirectoryName(dstPath);
-                if (!string.IsNullOrEmpty(dstDir))
-                    Directory.CreateDirectory(dstDir);
-
-                MajDebug.LogInfo($"Restore managed asset(Windows): {srcPath} -> {dstPath}");
-
-                try
-                {
-                    var data = File.ReadAllBytes(srcPath);
-                    if (data.Length == 0)
-                    {
-                        MajDebug.LogError($"Restore managed asset failed(Windows): empty data: {line}\nsrc={srcPath}");
-                        continue;
-                    }
-
-                    File.WriteAllBytes(dstPath, data);
-                }
-                catch (Exception e)
-                {
-                    MajDebug.LogError($"Restore managed asset failed(Windows): {line}\nsrc={srcPath}\n{e}");
-                }
-            }
-#endif
-        }
-
-        private static void MoveCharts()
-        {
-            var src = Path.Combine(MajEnv.RootPath, "ExtStreamingAssets", "MaiCharts", "Original");
-            var dst = Path.Combine(MajEnv.RootPath, "MaiCharts", "Original");
-
-            if (!Directory.Exists(src))
-            {
-                MajDebug.LogError($"Move failed: source not found: {src}");
-                return;
-            }
-
-            if (Directory.Exists(dst))
-                Directory.Delete(dst, recursive: true);
-
-            Directory.Move(sourceDirName: src, destDirName: dst);
-            MajDebug.LogInfo($"Moved: {src} -> {dst}");
-        }
-
-        private static void MoveSkins()
-        {
-            var src = Path.Combine(MajEnv.RootPath, "ExtStreamingAssets", "Skins", "default");
-            var dst = Path.Combine(MajEnv.RootPath, "Skins", "default");
-
-            if (!Directory.Exists(src))
-            {
-                MajDebug.LogError($"Move failed: source not found: {src}");
-                return;
-            }
-
-            if (Directory.Exists(dst))
-                Directory.Delete(dst, recursive: true);
-
-            Directory.Move(sourceDirName: src, destDirName: dst);
-            MajDebug.LogInfo($"Moved: {src} -> {dst}");
-        }
         #endregion
-
-#if UNITY_ANDROID
-        class OnNewIntentCallbackProxy : AndroidJavaProxy
-        {
-            readonly GameManager _gameManager;
-            public OnNewIntentCallbackProxy(GameManager gm) : base("net.majdata.majdataplay.CSharpOnNewIntentCallback")
-            {
-                _gameManager = gm;
-            }
-
-            public void OnNewIntent(AndroidJavaObject intent)
-            {
-                _gameManager.Android_OnNewIntent(intent);
-            }
-        }
-        class OnActivityResultCallbackProxy : AndroidJavaProxy
-        {
-            readonly GameManager _gameManager;
-            public OnActivityResultCallbackProxy(GameManager gm) : base("net.majdata.majdataplay.CSharpOnActivityResultCallback")
-            {
-                _gameManager = gm;
-            }
-
-            public void OnActivityResult(int requestCode, int resultCode, AndroidJavaObject? intent)
-            {
-                _gameManager.Android_OnActivityResult(requestCode, resultCode, intent);
-            }
-        }
-#endif
-        static class ChartImporter
-        {
-            static string _importRoot = string.Empty;
-            static ValueTask _importTask = UniTask.CompletedTask;
-            static readonly ConcurrentQueue<string> _pendingImportTasks = new ConcurrentQueue<string>();
-            
-            public static ValueTask OnStartAsync()
-            {
-                _importRoot = Path.Combine(MajEnv.ChartPath, "Import");
-                if (_pendingImportTasks.Count != 0)
-                {
-                    _importTask = Import();
-                    return _importTask;
-                }
-                return UniTask.CompletedTask;
-            }
-            public static void AddImportTask(string tempFilePath)
-            {
-                _pendingImportTasks.Enqueue(tempFilePath);
-            }
-            public static void OnUpdate()
-            {
-                if (SceneSwitcher.CurrentScene == MajScenes.Empty || 
-                    _pendingImportTasks.Count == 0 ||
-                    !_importTask.IsCompleted)
-                {
-                    return;
-                }
-                _importTask = Import();
-            }
-            static async ValueTask Import()
-            {
-                static void CopyDirectory(string sourceDir, string destDir)
-                {
-                    var dirs = new Stack<(string src, string dst)>();
-                    dirs.Push((sourceDir, destDir));
-
-                    while (dirs.Count > 0)
-                    {
-                        var (currentSource, currentDest) = dirs.Pop();
-
-                        Directory.CreateDirectory(currentDest);
-
-                        foreach (var file in Directory.GetFiles(currentSource))
-                        {
-                            var destFile = Path.Combine(currentDest, Path.GetFileName(file));
-                            File.Copy(file, destFile, true);
-                        }
-
-                        foreach (var subDir in Directory.GetDirectories(currentSource))
-                        {
-                            var newDest = Path.Combine(currentDest, Path.GetFileName(subDir));
-                            dirs.Push((subDir, newDest));
-                        }
-                    }
-                }
-                var nextScene = (MajScenes?)MajScenes.List;
-                if(SceneSwitcher.CurrentScene == MajScenes.Init)
-                {
-                    await MajInstances.SceneSwitcher.FadeInAsync();
-                    nextScene = null;
-                }
-                else
-                {
-                    while (SceneSwitcher.CurrentScene == MajScenes.Title)
-                    {
-                        nextScene = MajScenes.Login;
-                        await UniTask.Yield();
-                    }
-                    await MajInstances.SceneSwitcher.SwitchSceneAsync("Empty", false);
-                    await UniTask.Delay(300);
-                }
-                Directory.CreateDirectory(_importRoot);
-                while (_pendingImportTasks.TryDequeue(out var tempFilePath))
-                {
-                    MajDebug.LogDebug("[ZipImporter] Got file: " + tempFilePath);
-
-                    if (!File.Exists(tempFilePath))
-                    {
-                        MajDebug.LogError("[ZipImporter] File not found: " + tempFilePath);
-                        continue;
-                    }
-
-                    var ext = Path.GetExtension(tempFilePath).ToLowerInvariant();
-                    if (ext != ".zip" && ext != ".adx")
-                    {
-                        MajDebug.LogError("[ZipImporter] Unsupported extension: " + ext);
-                        continue;
-                    }
-                    var tempOutDir = Path.Combine(MajEnv.TempPath, Guid.NewGuid().ToString());
-                    
-                    try
-                    {
-                        var dirInfo = Directory.CreateDirectory(tempOutDir);
-                        using var archive = ZipFile.OpenRead(tempFilePath);
-                        var totalSize = archive.Entries.Sum(x => x.Length);
-                        var decompressedSize = 0L;
-                        var destRootFull = Path.GetFullPath(tempOutDir);
-                        if (!destRootFull.EndsWith(Path.DirectorySeparatorChar.ToString(), StringComparison.Ordinal))
-                        {
-                            destRootFull += Path.DirectorySeparatorChar;
-                        }
-                        foreach (var entry in archive.Entries)
-                        {
-                            if (string.IsNullOrEmpty(entry.Name))
-                            {
-                                continue;
-                            }
-
-                            var combinedPath = Path.Combine(tempOutDir, entry.FullName);
-                            var fullPath = Path.GetFullPath(combinedPath);
-
-                            if (!fullPath.StartsWith(destRootFull, StringComparison.Ordinal))
-                            {
-                                throw new IOException("Zip entry escapes destination: " + entry.FullName);
-                            }
-
-                            var dir = Path.GetDirectoryName(fullPath);
-                            if (!string.IsNullOrEmpty(dir))
-                            {
-                                Directory.CreateDirectory(dir);
-                            }
-
-                            if (File.Exists(fullPath))
-                            {
-                                File.Delete(fullPath);
-                            }
-
-                            entry.ExtractToFile(fullPath);
-                            decompressedSize += entry.Length;
-                            MajInstances.SceneSwitcher.SetLoadingText($"Extracting...\n{decompressedSize * 100 / (double)totalSize:F2}%");
-                            await UniTask.Yield();
-                        }
-                        var subDirs = dirInfo.GetDirectories();
-                        if (subDirs.Length == 0)
-                        {
-                            continue;
-                        }
-                        Parallel.For(0, subDirs.Length, j =>
-                        {
-                            var dir = subDirs[j];
-                            if (dir.Attributes.HasFlag(FileAttributes.Hidden) || dir.Attributes.HasFlag(FileAttributes.System) || dir.Name.StartsWith("."))
-                            {
-                                return;
-                            }
-                            var subDirCount = dir.EnumerateDirectories()
-                                                 .Count(x => !(x.Attributes.HasFlag(FileAttributes.Hidden) || x.Attributes.HasFlag(FileAttributes.System) || x.Name.StartsWith(".")));
-
-                            if (subDirCount == 0)
-                            {
-                                var dirName = dir.Name;
-                                var dstPath = Path.Combine(_importRoot, dirName);
-                                for (var i = 0; Directory.Exists(dstPath); i++)
-                                {
-                                    dstPath = Path.Combine(_importRoot, $"{dirName} ({i + 1})");
-                                }
-                                CopyDirectory(dir.FullName, dstPath);
-                            }
-                            else
-                            {
-                                var dirName = dir.Name;
-                                var dstPath = Path.Combine(MajEnv.ChartPath, dirName);
-                                for (var i = 0; Directory.Exists(dstPath); i++)
-                                {
-                                    dstPath = Path.Combine(MajEnv.ChartPath, $"{dirName} ({i + 1})");
-                                }
-                                CopyDirectory(dir.FullName, dstPath);
-                            }
-                            Directory.Delete(dir.FullName, true);
-                        });
-                    }
-                    catch (Exception e)
-                    {
-                        MajDebug.LogError("[ZipImporter] Extract FAILED: " + e);
-
-                        try { Directory.Delete(tempOutDir, true); } catch { /* ignore */ }
-                        return;
-                    }
-                    finally
-                    {
-#if UNITY_ANDROID
-                        File.Delete(tempFilePath);
-#endif
-                    }
-                }
-                var progress = new Progress<string>();
-                progress.ProgressChanged += (o, e) =>
-                {
-                    MajInstances.SceneSwitcher.SetLoadingText(e);
-                };
-                var task = SongStorage.RefreshLocalAsync(progress);
-                while (!task.IsCompleted)
-                {
-                    await UniTask.Yield();
-                }
-                if (!task.IsCompletedSuccessfully)
-                {
-                    MajInstances.SceneSwitcher.SetLoadingText("MAJTEXT_SCAN_CHARTS_FAILED".i18n(), Color.red);
-                }
-                else
-                {
-                    MajInstances.SceneSwitcher.SetLoadingText(string.Empty);
-                }
-                await UniTask.Delay(3000);
-                if(nextScene is MajScenes scene)
-                {
-                    await MajInstances.SceneSwitcher.SwitchSceneAsync(scene.ToString());
-                }
-            }
-
-            public static void Android_OnNewIntent(object? sender, AndroidJavaObject? intent)
-            {
-                var intentUri = intent?.Call<AndroidJavaObject>("getData");
-                if (intentUri is null)
-                {
-                    return;
-                }
-                using var fileIOKit = new AndroidJavaClass("net.majdata.majdataplay.FileIOKit");
-                var tempPath = Path.Combine(MajEnv.CachePath, "Runtime", $"{Guid.NewGuid()}.zip");
-                var returnCode = fileIOKit.CallStatic<int>("CopyContentToFile", intentUri, tempPath);
-
-                MajDebug.LogDebug($"[Android][FileIOKit] return {returnCode}");
-                if(returnCode != 0)
-                {
-                    return;
-                }
-
-                AddImportTask(tempPath);
-            }
-        }
     }
 }

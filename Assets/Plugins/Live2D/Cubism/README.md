@@ -6,6 +6,8 @@
 
 Welcome to the open components of the Cubism SDK for Unity.
 
+It is used in conjunction with the Live2D Cubism Core.
+
 Go [here](https://www.live2d.com/download/cubism-sdk/download-unity/) if you're looking for the download page of the SDK package.
 
 ## License
@@ -15,6 +17,19 @@ Please read the [license](LICENSE.md) before use.
 ## Notices
 
 Please read the [notices](NOTICE.md) before use.
+
+## Compatibility with Cubism 5.3 new features and previous Cubism SDK versions
+
+This SDK is compatible with Cubism 5.3.  
+For SDK compatibility with new features in Cubism 5.3 Editor, please refer to [here](https://docs.live2d.com/en/cubism-sdk-manual/cubism-5-3-new-functions/).  
+For compatibility with previous versions of Cubism SDK, please refer to [here](https://docs.live2d.com/en/cubism-sdk-manual/compatibility-with-cubism-5-3/).
+
+## Runtime requirements
+
+This SDK targets the **Universal Render Pipeline (URP)** and requires custom render passes for drawing models. Please check [Differences from Cubism 5 SDK for Unity R4_1 and earlier](https://docs.live2d.com/en/cubism-sdk-manual/differences-from-before-unity-r4_1/) and [Migration from Built-in Render Pipeline to URP](https://docs.live2d.com/en/cubism-sdk-manual/migration-from-birp-to-urp/).
+The **Built-in Render Pipeline** and **High Definition Render Pipeline (HDRP)** are not supported. 
+
+Use with the **Input System** package (`com.unity.inputsystem`) is expected. Projects that rely only on the legacy Input Manager may need to add the package or adjust project settings following Unity’s documentation.
 
 ## Structure
 
@@ -28,7 +43,7 @@ Components and classes in this group are a shim layer for wrapping the unmanaged
 
 #### Framework
 
-Components and classes in this group provide additional functionality like lip-syncing, as well as integration of "foreign" Cubism files with Unity. Turning Cubism files into Prefabs and AnimationClips is done here. All the framework code is located in `./Assets/Live2D/Cubism/Framework`.
+Components and classes in this group provide additional functionality like lip-syncing, as well as integration of "foreign" Cubism files with Unity. The feature to convert Cubism files into Prefabs and AnimationClips is here.All the framework code is located in `./Assets/Live2D/Cubism/Framework`.
 
 #### Rendering
 
@@ -46,18 +61,17 @@ Resources like shaders and other assets are located in `./Assets/Live2D/Cubism/R
 
 | Unity | Version |
 | --- | --- |
-| Tech Stream | 2022.2.18f1 |
-| LTS | 2021.3.24f1 |
-| LTS | 2020.3.47f1 |
+| LTS | 6000.3.11f1 |
+| LTS | 6000.0.71f1 |
 
 | Library / Tool | Version |
 | --- | --- |
-| Android SDK / NDK | *1 |
-| Visual Studio 2022 | 17.5.5 |
-| Windows SDK | 10.0.22621.0 |
-| Xcode | 14.2 |
+| Android SDK / NDK | *2 |
+| Visual Studio 2022 | 17.14.29 |
+| Windows SDK | 10.0.26100.7705 |
+| Xcode | 26.3 |
 
-*1 Use libraries embedded with Unity or recommended.
+*2 Use libraries embedded with Unity or recommended.
 
 ### C# compiler
 
@@ -73,17 +87,15 @@ https://docs.unity3d.com/ja/2018.4/Manual/CSharpCompiler.html
 
 | Platform | Version |
 | --- | --- |
-| Android | 13 |
-| iOS | 16.4.1 |
-| iPadOS | 16.4.1 |
-| Ubuntu | 20.04.6 |
-| macOS | 13.3.1 |
-| Windows 10 | 22H2 |
-| Google Chrome | 113.0.5672.93 |
-| Chrome OS 64bit (x86_64) | 113.0.5672.114 |
-| Chrome OS 32bit (ARMv8) (*2) | 113.0.5672.114 |
+| Android | 16 |
+| iOS | 26.4 |
+| iPadOS | 26.4 |
+| Ubuntu | 24.04.3 |
+| macOS | 26.4 |
+| Windows 11 | 25H2 (*4) |
+| Google Chrome | 146.0.7680.165 |
 
-*2 This is a confirmation of operation with APK files for Android.
+*4 We have not verified the operation of builds for UWP.
 
 ## Branches
 
@@ -105,7 +117,7 @@ There are many ways to contribute to the project: logging bugs, submitting pull 
 
 ### Forking And Pull Requests
 
-We very much appreciate your pull requests, whether they bring fixes, improvements, or even new features. Note, however, that the wrapper is designed to be as lightweight and shallow as possible and should therefore only be subject to bug fixes and memory/performance improvements. To keep the main repository as clean as possible, create a personal fork and feature branches there as needed.
+We very much appreciate your pull requests, whether they bring fixes, improvements, or even new features. To keep the main repository as clean as possible, create a personal fork and feature branches there as needed.
 
 ### Bugs
 
@@ -127,9 +139,9 @@ Try to stick to the [Microsoft guidelines](https://msdn.microsoft.com/en-us/libr
 - Stay away from LINQ and prefer `for` over `foreach` anywhere else.
 - Try to be explicit. Prefer `private void Update()` over `void Update()`.
 
-## Community
+## Forum
 
-If you have any questions, please join the official Live2D community and discuss with other users.
+If you have any questions, please join the official Live2D forum and discuss with other users.
 
-- [Live2D community](https://community.live2d.com/)
-- [Live2D 公式コミュニティ (Japanese)](https://creatorsforum.live2d.com/)
+- [Live2D Creator's Forum](https://community.live2d.com/)
+- [Live2D 公式クリエイターズフォーラム (Japanese)](https://creatorsforum.live2d.com/)

@@ -2,6 +2,7 @@
 using MajdataPlay.Extensions;
 using MajdataPlay.Numerics;
 using MajdataPlay.Scenes.Game.Notes;
+using MajdataPlay.Scenes.Game.Utils;
 using System;
 using System.Collections.Generic;
 using System.Diagnostics;
@@ -16,15 +17,21 @@ namespace MajdataPlay.Scenes.Game
     [Il2CppSetOption(Option.ArrayBoundsChecks, false)]
     internal sealed class FastLateDisplayer: MajComponent
     {
+        /// <summary>
+        /// Gets the world position or updates its X and Y coordinates while preserving sorting depth.
+        /// </summary>
         public Vector3 Position
         {
             get => Transform.position;
-            set => Transform.position = value;
+            set => NoteHelper.Sorting.SetPosition(Transform, value);
         }
+        /// <summary>
+        /// Gets the local position or updates its X and Y coordinates while preserving sorting depth.
+        /// </summary>
         public Vector3 LocalPosition
         {
             get => Transform.localPosition;
-            set => Transform.localPosition = value;
+            set => NoteHelper.Sorting.SetLocalPosition(Transform, value);
         }
         Animator _animator;
 
@@ -41,6 +48,8 @@ namespace MajdataPlay.Scenes.Game
         const float ANIM_LENGTH_SEC = 1 / 60f * 21;
 
         float _animRemainingTime = 0;
+        private long _expectedTrigger = long.MaxValue;
+
         protected override void Awake()
         {
             base.Awake();
@@ -60,6 +69,11 @@ namespace MajdataPlay.Scenes.Game
             if (!Active || _animRemainingTime < 0)
             {
                 return;
+            }
+            if (_expectedTrigger != long.MaxValue)
+            {
+                _animator.SetTrigger((int)_expectedTrigger);
+                _expectedTrigger = long.MaxValue;
             }
             var deltaTime = MajTimeline.DeltaTime;
             _animator.Update(deltaTime);
@@ -89,13 +103,12 @@ namespace MajdataPlay.Scenes.Game
             }
             if (judgeResult.IsBreak)
             {
-                _animator.SetTrigger(BREAK_ANIM_HASH);
+                _expectedTrigger = BREAK_ANIM_HASH;
             }
             else
             {
-                _animator.SetTrigger(PERFECT_ANIM_HASH);
+                _expectedTrigger = PERFECT_ANIM_HASH;
             }
-            _animator.Update(0.000000114514f);
             _animRemainingTime = ANIM_LENGTH_SEC;
         }
         [MethodImpl(MethodImplOptions.AggressiveInlining)]

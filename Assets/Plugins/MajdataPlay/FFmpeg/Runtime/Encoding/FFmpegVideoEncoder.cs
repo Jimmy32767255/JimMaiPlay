@@ -1,0 +1,1439 @@
+#nullable enable
+using AOT;
+using FFmpeg.AutoGen;
+using MajdataPlay.Diagnostics;
+using MajdataPlay.FFmpeg.Internal;
+using MajdataPlay.FFmpeg.Interop;
+using MajdataPlay.IO.Storage;
+using System;
+using System.Collections.Generic;
+using System.Globalization;
+using System.IO;
+using System.Runtime.InteropServices;
+using System.Text;
+using System.Threading;
+
+namespace MajdataPlay.FFmpeg
+{
+    /// <summary>Encodes packed sRGB RGBA8 frames and muxes a video-only local file on one worker.</summary>
+    /// <remarks>Open, Encode, Complete, and Dispose must run on the same thread. Dispose releases resources; Complete explicitly drains and finalizes the file.</remarks>
+    public sealed unsafe class FFmpegVideoEncoder : IDisposable
+    {
+        /// <summary>Identifies the reviewed AMF property checks by the checked-in source patch's SHA256 prefix.</summary>
+        private const string CheckedAmfConfigurationOption = "--extra-version=MajdataPlay-AMF-RC-v1-c0604b924b6a";
+        /// <summary>Identifies the native wrapper that rejects ignored x265 parameters.</summary>
+        private const string CheckedX265ConfigurationMarker = "MajdataPlay-X265-Params-v1-5b457330f94a";
+        /// <summary>Identifies the native wrapper that fails when the Intel runtime corrects a QSV rate-control request.</summary>
+        internal const string CheckedQsvConfigurationMarker = "MajdataPlay-QSV-RC-v1-140460417695";
+#if UNITY_EDITOR_WIN || UNITY_STANDALONE_WIN
+        /// <summary>Lists the backends tried on FFmpeg's default devices when no GPU list is available.</summary>
+        private static readonly string[] s_windowsDefaultEncoders = { "_nvenc", "_amf", "_qsv" };
+        /// <summary>Lists the AMD hardware encoder backend.</summary>
+        private static readonly string[] s_amfEncoder = { "_amf" };
+        /// <summary>Lists the Intel hardware encoder backend.</summary>
+        private static readonly string[] s_qsvEncoder = { "_qsv" };
+#elif UNITY_EDITOR_LINUX || UNITY_STANDALONE_LINUX
+        /// <summary>Lists the backends tried on FFmpeg's default devices when no GPU list is available.</summary>
+        private static readonly string[] s_linuxDefaultEncoders = { "_nvenc", "_vaapi", "_qsv" };
+        /// <summary>Lists the Intel hardware encoder backends.</summary>
+        private static readonly string[] s_intelLinuxEncoders = { "_vaapi", "_qsv" };
+        /// <summary>Lists the hardware encoder backend of other render nodes.</summary>
+        private static readonly string[] s_vaapiEncoder = { "_vaapi" };
+#endif
+#if UNITY_EDITOR_WIN || UNITY_STANDALONE_WIN || UNITY_EDITOR_LINUX || UNITY_STANDALONE_LINUX
+        /// <summary>Lists the NVIDIA hardware encoder backend.</summary>
+        private static readonly string[] s_nvencEncoder = { "_nvenc" };
+#endif
+        /// <summary>Roots the managed local-file write callback for IL2CPP and Mono.</summary>
+        private static readonly avio_alloc_context_write_packet s_writeCallback = WriteOutput;
+        /// <summary>Roots the managed local-file seek callback for IL2CPP and Mono.</summary>
+        private static readonly avio_alloc_context_seek s_seekCallback = SeekOutput;
+        /// <summary>Stores immutable settings for this encoder instance.</summary>
+        private readonly EncoderOptions _options;
+        /// <summary>Stores the pixel layout that every submitted frame uses.</summary>
+        private readonly CapturePixelLayout _inputLayout;
+        /// <summary>Reuses the existing bounded one-second compressed bitrate estimator.</summary>
+        private readonly VideoBitRateTracker _bitRateTracker = new VideoBitRateTracker();
+        /// <summary>Owns the output container context.</summary>
+        private AVFormatContext* _format;
+        /// <summary>Owns the selected codec context.</summary>
+        private AVCodecContext* _codec;
+        /// <summary>Borrows the output video stream from the container.</summary>
+        private AVStream* _stream;
+        /// <summary>Owns reusable compressed packet storage.</summary>
+        private AVPacket* _packet;
+        /// <summary>Owns reusable CPU encoder input frame storage.</summary>
+        private AVFrame* _frame;
+        /// <summary>Owns reusable hardware upload frame storage when VAAPI is selected.</summary>
+        private AVFrame* _hardwareFrame;
+        /// <summary>Owns an optional VAAPI device reference.</summary>
+        private AVBufferRef* _hardwareDevice;
+        /// <summary>Owns an optional VAAPI frame pool reference.</summary>
+        private AVBufferRef* _hardwareFrames;
+        /// <summary>Stores the Android hardware component and input format chosen for the MediaCodec candidate, if any.</summary>
+        private MediaCodecEncoderSelection? _mediaCodecSelection;
+        /// <summary>Owns the multi-threaded RGBA to encoder-pixel-format converter.</summary>
+        private CaptureFrameConverter? _converter;
+        /// <summary>Owns the custom seekable local-file AVIO context.</summary>
+        private AVIOContext* _io;
+        /// <summary>Owns the output file opened with CreateNew to prevent overwrite races.</summary>
+        private Stream? _output;
+        /// <summary>Keeps this instance reachable by native file callbacks.</summary>
+        private GCHandle _selfHandle;
+        /// <summary>Stores cancellation for encoding and local I/O.</summary>
+        private CancellationToken _cancellation;
+        /// <summary>Stores the first managed local I/O failure to rethrow outside native callbacks.</summary>
+        private Exception? _ioError;
+        /// <summary>Identifies the worker that owns the native contexts.</summary>
+        private int _ownerThread;
+        /// <summary>Stores the last accepted frame timestamp, or -1 before the first frame.</summary>
+        private long _lastFrameIndex = -1;
+        /// <summary>Stores the latest encoded packet end on the recording timeline.</summary>
+        private double _latestPacketEnd;
+        /// <summary>Stores the current compressed bitrate for thread-safe readers.</summary>
+        private long _currentBitRate;
+        /// <summary>Counts submitted video frames accepted by the encoder.</summary>
+        private long _encodedFrames;
+        /// <summary>Counts compressed video payload bytes written to the muxer.</summary>
+        private long _bytesWritten;
+        /// <summary>Indicates that the encoder and file header opened successfully.</summary>
+        private bool _opened;
+        /// <summary>Indicates that delayed packets and the output trailer were written successfully.</summary>
+        private bool _completed;
+        /// <summary>Prevents access after native resources have been released.</summary>
+        private bool _disposed;
+
+        /// <summary>Gets the selected FFmpeg codec implementation name, or null before opening.</summary>
+        public string? EncoderName { get; private set; }
+        /// <summary>Gets the actual compression backend after opening successfully.</summary>
+        public VideoEncoderType EncoderType { get; private set; }
+        /// <summary>Gets the actual configured rate control mode after opening successfully.</summary>
+        public VideoRateControlMode RateControlMode => _options.RateControlMode;
+        /// <summary>Gets the fixed compressed video format selected for this recording.</summary>
+        public VideoEncodingFormat EncodingFormat => _options.Format;
+        /// <summary>Gets the configured target bitrate in bits per second.</summary>
+        public long BitRate => _options.BitRate;
+        /// <summary>Gets the effective encoder maximum bitrate in bits per second; CBR uses its constant target.</summary>
+        /// <remarks>
+        /// VBV encoders use a buffered limit; libvpx/libaom use rate-control budgets that can overshoot in either mode. Neither limits individual packet sizes.
+        /// Android MediaCodec receives only the target bitrate, so this value is not enforced; see <see cref="IsMaximumBitRateEnforced"/>.
+        /// </remarks>
+        public long MaximumBitRate => RateControlMode == VideoRateControlMode.CBR ? _options.BitRate : _options.MaximumBitRate;
+        /// <summary>Gets whether the opened encoder receives <see cref="MaximumBitRate"/> as a rate limit or budget.</summary>
+        /// <remarks>False for Android MediaCodec, which accepts a target bitrate and mode but no peak rate. True before opening.</remarks>
+        public bool IsMaximumBitRateEnforced => !(_mediaCodecSelection.HasValue && EncoderType == VideoEncoderType.Hardware);
+        /// <summary>Gets the reason hardware preference fell back to another GPU or to software, or null when no fallback occurred.</summary>
+        public string? HardwareFallbackReason { get; private set; }
+        /// <summary>Gets how hardware preference continues when Unity's renderer GPU cannot encode the requested format.</summary>
+        public HardwareFallbackRoute HardwareFallbackRoute => _options.HardwareFallbackRoute;
+        /// <summary>Gets a diagnostic description of the GPU or other device running the selected encoder, or null before opening.</summary>
+        /// <remarks>Software encoding reports <c>Software</c>; hardware encoding names the GPU and its relationship to Unity's renderer when it was selected explicitly.</remarks>
+        public string? EncoderDevice { get; private set; }
+        /// <summary>Gets the current compressed video bitrate estimated over up to one recording second, in bits per second.</summary>
+        public long CurrentBitRate => Interlocked.Read(ref _currentBitRate);
+        /// <summary>Gets the number of frames accepted by the encoder; delayed packets are finalized by Complete.</summary>
+        public long EncodedFrames => Interlocked.Read(ref _encodedFrames);
+        /// <summary>Gets compressed video payload bytes written to the muxer, excluding container overhead.</summary>
+        public long BytesWritten => Interlocked.Read(ref _bytesWritten);
+        /// <summary>Gets the fixed output width in pixels.</summary>
+        public int Width => _options.Width;
+        /// <summary>Gets the fixed output height in pixels.</summary>
+        public int Height => _options.Height;
+        /// <summary>Gets the fixed output frame rate.</summary>
+        public int FrameRate => _options.FrameRate;
+        /// <summary>Gets the effective FFmpeg software codec worker count, or zero for hardware encoding.</summary>
+        public int SoftwareThreadCount { get; private set; }
+        /// <summary>Gets how the software codec parallelizes encoding: <c>frame</c>, <c>slice</c>, <c>codec</c> for library-managed workers, or <c>none</c> for one thread or hardware encoding.</summary>
+        public string SoftwareThreadingMode { get; private set; } = "none";
+        /// <summary>Gets the number of threads, including the encoder worker, converting captured RGBA frames to the encoder input format, or zero before opening.</summary>
+        /// <remarks>
+        /// Conversion runs on the CPU for hardware encoders as well, so this is independent of <see cref="SoftwareThreadCount"/>.
+        /// It stays zero for an encoder of GPU-converted NV12 input, which only copies planes.
+        /// </remarks>
+        public int ConverterThreadCount { get; private set; }
+
+        /// <summary>Creates an encoder of RGBA8 frames with an independent validated options snapshot.</summary>
+        /// <param name="options">The settings to copy for this recording.</param>
+        /// <exception cref="ArgumentNullException">Options are null.</exception>
+        /// <exception cref="ArgumentOutOfRangeException">A setting is outside its supported range.</exception>
+        public FFmpegVideoEncoder(EncoderOptions options) : this(options, CapturePixelLayout.Rgba32)
+        {
+        }
+
+        /// <summary>Creates an encoder of frames in one pixel layout with an independent validated options snapshot.</summary>
+        /// <param name="options">The settings to copy for this recording.</param>
+        /// <param name="inputLayout">The layout of every submitted frame: RGBA8 for <see cref="Encode"/> or NV12 for <see cref="EncodeNv12"/>.</param>
+        /// <exception cref="ArgumentNullException">Options are null.</exception>
+        /// <exception cref="ArgumentOutOfRangeException">A setting or the layout is outside its supported range.</exception>
+        internal FFmpegVideoEncoder(EncoderOptions options, CapturePixelLayout inputLayout)
+        {
+            _options = (options ?? throw new ArgumentNullException(nameof(options))).ValidateAndClone();
+            if (!Enum.IsDefined(typeof(CapturePixelLayout), inputLayout))
+            {
+                throw new ArgumentOutOfRangeException(nameof(inputLayout));
+            }
+
+            _inputLayout = inputLayout;
+        }
+
+        /// <summary>Selects an encoder and creates a new local output file using the extension's container format.</summary>
+        /// <param name="localOutputPath">The local output filename; existing files are never overwritten.</param>
+        /// <param name="cancellationToken">Cancellation for opening, subsequent encoding, and finalization.</param>
+        /// <exception cref="ArgumentException">The output path is empty or is a URL.</exception>
+        /// <exception cref="IOException">The output already exists or local file I/O fails.</exception>
+        /// <exception cref="UnauthorizedAccessException">The file cannot be created with the current permissions.</exception>
+        /// <exception cref="InvalidOperationException">The encoder is already open, accessed by another thread, or a native operation fails.</exception>
+        /// <exception cref="NotSupportedException">The native ABI, container, requested codec, or rate control combination is unavailable.</exception>
+        /// <exception cref="OperationCanceledException">Cancellation was requested.</exception>
+        /// <exception cref="OutOfMemoryException">A native allocation fails.</exception>
+        /// <exception cref="ObjectDisposedException">This instance has been disposed.</exception>
+        public void Open(string localOutputPath, CancellationToken cancellationToken)
+        {
+            using var profile = UnityProfiler.Create("FFmpeg.Encoder.Open");
+            EnsureOwner();
+            if (_format != null || _opened)
+            {
+                throw new InvalidOperationException("Encoder is already open.");
+            }
+
+            if (string.IsNullOrWhiteSpace(localOutputPath)
+                || (!Path.IsPathRooted(localOutputPath) && Uri.TryCreate(localOutputPath, UriKind.Absolute, out _)))
+            {
+                throw new ArgumentException("A local output filename is required.", nameof(localOutputPath));
+            }
+
+            var path = Path.GetFullPath(localOutputPath);
+            _ownerThread = Thread.CurrentThread.ManagedThreadId;
+            _cancellation = cancellationToken;
+            _cancellation.ThrowIfCancellationRequested();
+            try
+            {
+                CheckVersion("avutil", ffmpeg.avutil_version());
+                CheckVersion("avcodec", ffmpeg.avcodec_version());
+                CheckVersion("avformat", ffmpeg.avformat_version());
+                AVFormatContext* format = null;
+                var result = ffmpeg.avformat_alloc_output_context2(&format, null, null!, path);
+                _format = format;
+                if (result < 0 || format == null)
+                {
+                    throw new NotSupportedException("This FFmpeg build has no muxer for the output extension. Rebuild native libraries with recording encoders and muxers enabled.");
+                }
+
+                if ((format->oformat->flags & ffmpeg.AVFMT_NOFILE) != 0)
+                {
+                    throw new NotSupportedException("The selected muxer does not produce an ordinary local file.");
+                }
+
+                SelectEncoder();
+                _stream = ffmpeg.avformat_new_stream(_format, null);
+                if (_stream == null)
+                {
+                    throw new OutOfMemoryException("Cannot allocate the output video stream.");
+                }
+
+                _stream->time_base = _codec->time_base;
+                _stream->avg_frame_rate = _codec->framerate;
+                Check(ffmpeg.avcodec_parameters_from_context(_stream->codecpar, _codec), "Copy encoder stream parameters");
+                AllocateFrames();
+                OpenLocalFile(path);
+                CheckOutput(ffmpeg.avformat_write_header(_format, null), "Write video header");
+                _opened = true;
+                MajDebug.LogInfo("FFmpeg", "[Encoder] Opened encoder=" + EncoderName + ", backend=" + EncoderType
+                    + ", device=" + EncoderDevice + ", mode=" + RateControlMode + ", target=" + _options.BitRate + ", maximum=" + _codec->rc_max_rate
+                    + (IsMaximumBitRateEnforced ? string.Empty : " (not enforced by MediaCodec)")
+                    + (_mediaCodecSelection.HasValue ? ", component=" + _mediaCodecSelection.Value.ComponentName
+                        + ", input=" + _mediaCodecSelection.Value.PixelFormat : string.Empty)
+                    + ", software workers=" + SoftwareThreadCount + " (" + SoftwareThreadingMode + "), converter threads="
+                    + ConverterThreadCount + ".");
+            }
+            catch
+            {
+                Dispose();
+                throw;
+            }
+        }
+
+        /// <summary>Converts a tightly packed sRGB RGBA8 frame to the encoder's pixel format and drains available packets.</summary>
+        /// <param name="packedRgba">Exactly Width times Height times four sRGB bytes, borrowed only until this call returns.</param>
+        /// <param name="frameIndex">A nonnegative, strictly increasing timestamp in units of one output frame; gaps preserve dropped-frame timing.</param>
+        /// <param name="flipVertically">Whether the first input row is the bottom row and must be reversed.</param>
+        /// <exception cref="ArgumentException">The input buffer has the wrong length.</exception>
+        /// <exception cref="ArgumentOutOfRangeException">The frame timestamp is negative or not strictly increasing.</exception>
+        /// <exception cref="InvalidOperationException">The encoder is closed, finalized, accessed by another thread, created for NV12 input, or native conversion/encoding fails.</exception>
+        /// <exception cref="IOException">Writing the local output fails.</exception>
+        /// <exception cref="OperationCanceledException">Cancellation was requested.</exception>
+        /// <exception cref="ObjectDisposedException">This instance has been disposed.</exception>
+        public void Encode(ReadOnlySpan<byte> packedRgba, long frameIndex, bool flipVertically)
+        {
+            using var profile = UnityProfiler.Create("FFmpeg.Encoder.Encode");
+            PrepareInput(CapturePixelLayout.Rgba32, packedRgba.Length, nameof(packedRgba), frameIndex);
+            using (UnityProfiler.Create("FFmpeg.Encoder.ConvertRGBA"))
+            {
+                // The converter reads bottom-first rows in place, so the capture is not copied before conversion.
+                _converter!.Convert(packedRgba, flipVertically, _frame);
+            }
+
+            SubmitFrame(frameIndex);
+        }
+
+        /// <summary>Copies a GPU-converted NV12 frame into the encoder's pixel format and drains available packets.</summary>
+        /// <param name="nv12">Exactly Width times Height times 1.5 bytes, top row first, borrowed only until this call returns.</param>
+        /// <param name="frameIndex">A nonnegative, strictly increasing timestamp in units of one output frame; gaps preserve dropped-frame timing.</param>
+        /// <exception cref="ArgumentException">The input buffer has the wrong length.</exception>
+        /// <exception cref="ArgumentOutOfRangeException">The frame timestamp is negative or not strictly increasing.</exception>
+        /// <exception cref="InvalidOperationException">The encoder is closed, finalized, accessed by another thread, created for RGBA input, or native encoding fails.</exception>
+        /// <exception cref="IOException">Writing the local output fails.</exception>
+        /// <exception cref="OperationCanceledException">Cancellation was requested.</exception>
+        /// <exception cref="ObjectDisposedException">This instance has been disposed.</exception>
+        internal void EncodeNv12(ReadOnlySpan<byte> nv12, long frameIndex)
+        {
+            using var profile = UnityProfiler.Create("FFmpeg.Encoder.Encode");
+            PrepareInput(CapturePixelLayout.Nv12, nv12.Length, nameof(nv12), frameIndex);
+            using (UnityProfiler.Create("FFmpeg.Encoder.CopyNV12"))
+            {
+                CaptureFrameConverter.CopyNv12(nv12, Width, Height, _frame);
+            }
+
+            SubmitFrame(frameIndex);
+        }
+
+        /// <summary>Validates one submitted frame and makes the reusable input frame writable.</summary>
+        /// <param name="layout">The layout of the submitted frame.</param>
+        /// <param name="length">The byte length of the submitted frame.</param>
+        /// <param name="inputName">The parameter name of the submitted frame, reported by length failures.</param>
+        /// <param name="frameIndex">The submitted timestamp.</param>
+        /// <exception cref="ArgumentException">The input buffer has the wrong length.</exception>
+        /// <exception cref="ArgumentOutOfRangeException">The frame timestamp is negative or not strictly increasing.</exception>
+        /// <exception cref="InvalidOperationException">The encoder is closed, finalized, accessed by another thread, created for another layout, or the frame cannot be made writable.</exception>
+        /// <exception cref="OperationCanceledException">Cancellation was requested.</exception>
+        /// <exception cref="ObjectDisposedException">This instance has been disposed.</exception>
+        private void PrepareInput(CapturePixelLayout layout, int length, string inputName, long frameIndex)
+        {
+            EnsureOpen();
+            _cancellation.ThrowIfCancellationRequested();
+            if (layout != _inputLayout)
+            {
+                throw new InvalidOperationException("This encoder accepts " + _inputLayout + " frames, not " + layout + ".");
+            }
+
+            if (length != layout.GetFrameByteCount(Width, Height))
+            {
+                throw new ArgumentException("The input must contain exactly one tightly packed " + layout + " frame.", inputName);
+            }
+
+            if (frameIndex < 0 || frameIndex <= _lastFrameIndex)
+            {
+                throw new ArgumentOutOfRangeException(nameof(frameIndex), "Frame indices must be nonnegative and strictly increasing.");
+            }
+
+            Check(ffmpeg.av_frame_make_writable(_frame), "Make encoder frame writable");
+        }
+
+        /// <summary>Submits the filled input frame, uploading it first for hardware frame pools, and drains available packets.</summary>
+        /// <param name="frameIndex">The validated timestamp of the frame.</param>
+        /// <exception cref="InvalidOperationException">Uploading or encoding fails.</exception>
+        /// <exception cref="IOException">Writing the local output fails.</exception>
+        /// <exception cref="OperationCanceledException">Cancellation was requested.</exception>
+        private void SubmitFrame(long frameIndex)
+        {
+            _frame->pts = frameIndex;
+            _frame->duration = 1;
+            var submitted = _frame;
+            if (_hardwareFrames != null)
+            {
+                using var profile = UnityProfiler.Create("FFmpeg.Encoder.UploadHardwareFrame");
+                ffmpeg.av_frame_unref(_hardwareFrame);
+                Check(ffmpeg.av_hwframe_get_buffer(_hardwareFrames, _hardwareFrame, 0), "Acquire encoder hardware frame");
+                Check(ffmpeg.av_hwframe_transfer_data(_hardwareFrame, _frame, 0), "Upload encoder hardware frame");
+                Check(ffmpeg.av_frame_copy_props(_hardwareFrame, _frame), "Copy hardware frame metadata");
+                submitted = _hardwareFrame;
+            }
+
+            SendFrame(submitted);
+            _lastFrameIndex = frameIndex;
+            Interlocked.Increment(ref _encodedFrames);
+            ReceivePackets(false);
+        }
+
+        /// <summary>Drains delayed encoder packets, writes the container trailer, and flushes the local output.</summary>
+        /// <remarks>Repeated successful calls have no effect. Cancellation or failure leaves a partial file for the caller to handle.</remarks>
+        /// <exception cref="InvalidOperationException">The encoder is not open, accessed by another thread, or draining/finalization fails.</exception>
+        /// <exception cref="IOException">Writing or flushing the local output fails.</exception>
+        /// <exception cref="OperationCanceledException">Cancellation was requested.</exception>
+        /// <exception cref="ObjectDisposedException">This instance has been disposed.</exception>
+        public void Complete()
+        {
+            using var profile = UnityProfiler.Create("FFmpeg.Encoder.Complete");
+            EnsureOwner();
+            if (_completed)
+            {
+                return;
+            }
+
+            EnsureOpen();
+            _cancellation.ThrowIfCancellationRequested();
+            SendFrame(null);
+            ReceivePackets(true);
+            CheckOutput(ffmpeg.av_write_trailer(_format), "Write video trailer");
+            ffmpeg.avio_flush(_io);
+            CheckOutput(_io->error, "Flush video output");
+            _output!.Flush();
+            _completed = true;
+        }
+
+        /// <summary>Attempts hardware implementations first when requested, then known software implementations of the same format.</summary>
+        /// <remarks>On Windows and Linux, hardware candidates run on Unity's renderer GPU first and then, as the fallback route allows, on the remaining GPUs.</remarks>
+        /// <exception cref="NotSupportedException">No installed implementation satisfies the requested format, mode, and rate limit.</exception>
+        /// <exception cref="OperationCanceledException">Cancellation was requested.</exception>
+        private void SelectEncoder()
+        {
+            var failures = new StringBuilder();
+            var codecId = GetCodecId(_options.Format);
+            if (ffmpeg.avformat_query_codec(_format->oformat, codecId, ffmpeg.FF_COMPLIANCE_NORMAL) == 0)
+            {
+                throw new NotSupportedException("The selected output container cannot store " + _options.Format + ".");
+            }
+
+            if (_options.PreferredEncoderType == VideoEncoderType.Hardware)
+            {
+                if (_options.Format != VideoEncodingFormat.MPEG4)
+                {
+#if UNITY_EDITOR_WIN || UNITY_STANDALONE_WIN
+                    if (TryGpuEncoders(failures))
+                    {
+                        return;
+                    }
+                    failures.Append("MediaFoundation cannot verify that its driver accepted rate control and maximum bitrate; ");
+#elif UNITY_EDITOR_OSX || UNITY_STANDALONE_OSX
+                    if (_options.Format == VideoEncodingFormat.H264 && TryEncoder("h264_videotoolbox", true, failures))
+                    {
+                        return;
+                    }
+                    if (_options.Format != VideoEncodingFormat.H264)
+                    {
+                        failures.Append("VideoToolbox does not expose a checked maximum-rate setting for this format; ");
+                    }
+#elif UNITY_IOS && !UNITY_EDITOR
+                    failures.Append("VideoToolbox cannot verify hardware-only encoding through this iOS FFmpeg wrapper; ");
+#elif UNITY_EDITOR_LINUX || UNITY_STANDALONE_LINUX
+                    if (TryGpuEncoders(failures))
+                    {
+                        return;
+                    }
+#elif UNITY_ANDROID
+                    if (TryMediaCodec(failures))
+                    {
+                        return;
+                    }
+#endif
+                }
+                else
+                {
+                    failures.Append("No supported MPEG4 hardware encoder; ");
+                }
+
+                HardwareFallbackReason = failures.ToString().Trim();
+                MajDebug.LogWarning("FFmpeg", "[Encoder] " + HardwareFallbackReason + " Trying software encoding.");
+            }
+
+            var softwareName = _options.Format switch
+            {
+                VideoEncodingFormat.H264 => "libx264",
+                VideoEncodingFormat.HEVC => "libx265",
+                VideoEncodingFormat.VP9 => "libvpx-vp9",
+                VideoEncodingFormat.AV1 => "libaom-av1",
+                _ => "mpeg4"
+            };
+            if (!TryEncoder(softwareName, false, failures))
+            {
+                throw new NotSupportedException("No encoder supports " + _options.Format + " with " + _options.RateControlMode
+                    + " and the requested rate limit. Rebuild FFmpeg with the required encoder and muxer; formats are not substituted. " + failures);
+            }
+        }
+
+#if UNITY_EDITOR_WIN || UNITY_STANDALONE_WIN || UNITY_EDITOR_LINUX || UNITY_STANDALONE_LINUX
+        /// <summary>Tries the checked hardware encoder of Unity's renderer GPU, then of each remaining GPU when the fallback route allows.</summary>
+        /// <param name="failures">The startup diagnostics receiving rejected candidate reasons.</param>
+        /// <returns>True when a hardware encoder opened and became the selected encoder.</returns>
+        /// <exception cref="OperationCanceledException">Cancellation was requested.</exception>
+        /// <exception cref="OutOfMemoryException">A codec context or device reference cannot be allocated.</exception>
+        private bool TryGpuEncoders(StringBuilder failures)
+        {
+            var prefix = _options.Format.ToString().ToLowerInvariant();
+            var gpus = _options.HardwareGpus != null
+                ? HardwareGpuCatalog.Restrict(_options.HardwareGpus, _options.HardwareFallbackRoute)
+                : HardwareGpuCatalog.GetCandidates(_options.HardwareFallbackRoute);
+            if (gpus.Count == 0)
+            {
+                // Without a GPU list, FFmpeg's default devices stand in for Unity's renderer GPU.
+                foreach (var suffix in GetGpuEncoderSuffixes(0))
+                {
+                    if (TryEncoder(prefix + suffix, true, failures))
+                    {
+                        return true;
+                    }
+                }
+
+                return false;
+            }
+
+            foreach (var gpu in gpus)
+            {
+                var suffixes = GetGpuEncoderSuffixes(gpu.VendorId);
+                if (suffixes.Length == 0)
+                {
+                    failures.Append(gpu).Append(" has no checked hardware encoder; ");
+                    continue;
+                }
+
+                foreach (var suffix in suffixes)
+                {
+                    if (!TryEncoder(prefix + suffix, true, failures, gpu))
+                    {
+                        continue;
+                    }
+
+                    if (gpu.Role == HardwareGpuRole.Other)
+                    {
+                        HardwareFallbackReason = failures.ToString().Trim() + " Encoding on " + gpu + ".";
+                        MajDebug.LogWarning("FFmpeg", "[Encoder] " + HardwareFallbackReason);
+                    }
+
+                    return true;
+                }
+            }
+
+            if (_options.HardwareFallbackRoute == HardwareFallbackRoute.SoftwareCodec)
+            {
+                failures.Append("Other GPUs were not tried because the fallback route is ").Append(_options.HardwareFallbackRoute).Append("; ");
+            }
+
+            return false;
+        }
+
+        /// <summary>Lists the checked hardware encoder backends for a GPU vendor, in the order they are tried.</summary>
+        /// <param name="vendorId">The GPU's PCI vendor ID, or zero for FFmpeg's default devices without a GPU list.</param>
+        /// <returns>FFmpeg encoder name suffixes such as <c>_nvenc</c>; empty when the vendor has no checked encoder on this platform.</returns>
+        private static string[] GetGpuEncoderSuffixes(int vendorId)
+        {
+#if UNITY_EDITOR_WIN || UNITY_STANDALONE_WIN
+            return vendorId switch
+            {
+                0 => s_windowsDefaultEncoders,
+                HardwareGpu.NvidiaVendorId => s_nvencEncoder,
+                HardwareGpu.AmdVendorId => s_amfEncoder,
+                HardwareGpu.IntelVendorId => s_qsvEncoder,
+                _ => Array.Empty<string>()
+            };
+#else
+            // NVIDIA's VAAPI driver only decodes, so NVIDIA GPUs encode through NVENC.
+            // Intel GPUs prefer VAAPI, which QSV also runs on, and keep QSV as a second backend.
+            return vendorId switch
+            {
+                0 => s_linuxDefaultEncoders,
+                HardwareGpu.NvidiaVendorId => s_nvencEncoder,
+                HardwareGpu.IntelVendorId => s_intelLinuxEncoders,
+                _ => s_vaapiEncoder
+            };
+#endif
+        }
+#endif
+
+        /// <summary>Opens an Android hardware MediaCodec component chosen from <c>MediaCodecList</c> for the requested recording mode.</summary>
+        /// <param name="failures">The startup diagnostics receiving rejected candidate reasons.</param>
+        /// <returns>True when a hardware component opened and became the selected encoder.</returns>
+        /// <remarks>
+        /// The component is opened by its exact name, so MediaCodec cannot substitute a software implementation.
+        /// CBR/VBR select the driver rate-control algorithm; neither mode guarantees filler or a hard bitrate cap.
+        /// </remarks>
+        /// <exception cref="OperationCanceledException">Cancellation was requested.</exception>
+        /// <exception cref="OutOfMemoryException">The codec context cannot be allocated.</exception>
+        private bool TryMediaCodec(StringBuilder failures)
+        {
+            var name = MediaCodecEncoderSelector.GetEncoderName(_options.Format);
+            var mimeType = MediaCodecEncoderSelector.GetMimeType(_options.Format);
+            if (name == null || mimeType == null)
+            {
+                failures.Append("No MediaCodec wrapper is used for ").Append(_options.Format).Append("; ");
+                return false;
+            }
+
+            if (ffmpeg.avcodec_find_encoder_by_name(name) == null)
+            {
+                failures.Append(name).Append(" is not compiled in; ");
+                return false;
+            }
+
+            IReadOnlyList<MediaCodecEncoderCandidate> candidates;
+            try
+            {
+                var (codedWidth, codedHeight) = MediaCodecEncoderSelector.GetConfiguredSize(_options.Format, Width, Height);
+                candidates = AndroidMediaCodecEncoderQuery.GetCandidates(mimeType, codedWidth, codedHeight, FrameRate,
+                    checked((int)_options.BitRate), _options.RateControlMode == VideoRateControlMode.CBR);
+            }
+            catch (Exception error) when (!(error is OperationCanceledException))
+            {
+                // A failed capability query only rules out hardware; software fallback still records the requested format.
+                failures.Append("MediaCodec capability query failed: ").Append(error.Message).Append("; ");
+                return false;
+            }
+
+            if (!MediaCodecEncoderSelector.TrySelect(candidates, out var selection, failures))
+            {
+                return false;
+            }
+
+            _mediaCodecSelection = selection;
+            if (TryEncoder(name, true, failures))
+            {
+                return true;
+            }
+
+            _mediaCodecSelection = null;
+            return false;
+        }
+
+        /// <summary>Opens one known encoder and frees all candidate resources if it cannot satisfy the requested configuration.</summary>
+        /// <param name="name">The exact FFmpeg encoder name.</param>
+        /// <param name="hardware">Whether this candidate requires hardware compression.</param>
+        /// <param name="failures">The startup diagnostics receiving rejected candidate reasons.</param>
+        /// <param name="gpu">The GPU that must run a hardware candidate, or null for FFmpeg's default device or software.</param>
+        /// <returns>True when the candidate opened and became the selected encoder.</returns>
+        /// <exception cref="OperationCanceledException">Cancellation was requested.</exception>
+        /// <exception cref="OutOfMemoryException">The codec context or a device reference cannot be allocated.</exception>
+        private bool TryEncoder(string name, bool hardware, StringBuilder failures, HardwareGpu? gpu = null)
+        {
+            _cancellation.ThrowIfCancellationRequested();
+            var candidate = gpu == null ? name : name + " on " + gpu;
+            var codec = ffmpeg.avcodec_find_encoder_by_name(name);
+            if (codec == null)
+            {
+                failures.Append(candidate).Append(" is not compiled in; ");
+                return false;
+            }
+
+            _codec = ffmpeg.avcodec_alloc_context3(codec);
+            if (_codec == null)
+            {
+                throw new OutOfMemoryException("Cannot allocate encoder context.");
+            }
+
+            try
+            {
+                _codec->width = Width;
+                _codec->height = Height;
+                _codec->time_base = new AVRational { num = 1, den = FrameRate };
+                _codec->framerate = new AVRational { num = FrameRate, den = 1 };
+                _codec->sample_aspect_ratio = new AVRational { num = 1, den = 1 };
+                _codec->gop_size = FrameRate * 2;
+                _codec->max_b_frames = 0;
+                var maximumCodecThreads = name switch
+                {
+                    "libx265" => 16,
+                    "libvpx-vp9" => 64,
+                    "libaom-av1" => 64,
+                    _ => 128
+                };
+                _codec->thread_count = hardware ? 1 : Math.Min(_options.MaximumSoftwareThreads, maximumCodecThreads);
+                _codec->bit_rate = _options.BitRate;
+                _codec->rc_max_rate = MaximumBitRate;
+                _codec->rc_min_rate = _options.RateControlMode == VideoRateControlMode.CBR ? _options.BitRate : 0;
+                _codec->rc_buffer_size = checked((int)_codec->rc_max_rate);
+                _codec->color_range = AVColorRange.AVCOL_RANGE_MPEG;
+                _codec->colorspace = AVColorSpace.AVCOL_SPC_BT709;
+                _codec->color_primaries = AVColorPrimaries.AVCOL_PRI_BT709;
+                _codec->color_trc = AVColorTransferCharacteristic.AVCOL_TRC_IEC61966_2_1;
+                if ((_format->oformat->flags & ffmpeg.AVFMT_GLOBALHEADER) != 0)
+                {
+                    _codec->flags |= ffmpeg.AV_CODEC_FLAG_GLOBAL_HEADER;
+                }
+
+                ConfigureRateControl(name);
+                if (gpu != null)
+                {
+                    BindGpu(name, gpu);
+                }
+
+                if (name.EndsWith("_vaapi", StringComparison.Ordinal))
+                {
+                    ConfigureVaapi(gpu?.Device);
+                }
+                else if (_mediaCodecSelection.HasValue && name.EndsWith("_mediacodec", StringComparison.Ordinal))
+                {
+                    // FFmpeg's wrapper lists YUV420P first, but many components only accept NV12.
+                    _codec->pix_fmt = _mediaCodecSelection.Value.PixelFormat;
+                }
+                else
+                {
+                    _codec->pix_fmt = ChooseSoftwarePixelFormat(codec);
+                }
+
+                Check(ffmpeg.avcodec_open2(_codec, codec, null), "Open " + name);
+                if (!hardware && _codec->thread_count > _options.MaximumSoftwareThreads)
+                {
+                    throw new NotSupportedException("The encoder exceeds the requested software worker count.");
+                }
+
+                EncoderName = name;
+                EncoderType = hardware ? VideoEncoderType.Hardware : VideoEncoderType.Software;
+                EncoderDevice = !hardware ? "Software"
+                    : gpu != null ? gpu.ToString()
+                    : _mediaCodecSelection.HasValue ? "MediaCodec component " + _mediaCodecSelection.Value.ComponentName
+                    : "FFmpeg default hardware device";
+                UpdateThreadDiagnostics(hardware);
+                return true;
+            }
+            catch (Exception error) when (error is InvalidOperationException || error is NotSupportedException)
+            {
+                failures.Append(candidate).Append(": ").Append(error.Message).Append("; ");
+                ReleaseCodec();
+                return false;
+            }
+        }
+
+        /// <summary>Binds an NVENC, AMF or QSV candidate to one GPU before it opens.</summary>
+        /// <param name="name">The exact FFmpeg encoder name.</param>
+        /// <param name="gpu">The GPU that must run the encoder.</param>
+        /// <remarks>VAAPI candidates are bound through their render node in <see cref="ConfigureVaapi"/>.</remarks>
+        /// <exception cref="InvalidOperationException">The GPU's device cannot be created or the encoder rejects the selection.</exception>
+        /// <exception cref="NotSupportedException">The GPU cannot be mapped to a device that the encoder can select.</exception>
+        /// <exception cref="OutOfMemoryException">A device reference cannot be retained.</exception>
+        private void BindGpu(string name, HardwareGpu gpu)
+        {
+#if UNITY_EDITOR_WIN || UNITY_STANDALONE_WIN || UNITY_EDITOR_LINUX || UNITY_STANDALONE_LINUX
+            if (name.EndsWith("_nvenc", StringComparison.Ordinal))
+            {
+                // NVENC uploads CPU frames into its own CUDA context, so the CUDA ordinal selects
+                // the GPU. A session on a supplied D3D11 device opened but rejected CPU frames
+                // with EINVAL on the tested NVIDIA driver.
+                if (!CudaDeviceQuery.TryGetOrdinal(gpu, out var ordinal))
+                {
+                    throw new NotSupportedException("No CUDA device matches this GPU's adapter LUID or PCI location.");
+                }
+
+                SetOption("gpu", ordinal.ToString(CultureInfo.InvariantCulture));
+            }
+
+            if (name.EndsWith("_qsv", StringComparison.Ordinal))
+            {
+                // A QSV session runs on the GPU of its child device: a D3D11 adapter on
+                // Windows or a DRM render node on Linux. The encoder uploads CPU frames.
+#if UNITY_EDITOR_WIN || UNITY_STANDALONE_WIN
+                CreateHardwareDevice(AVHWDeviceType.AV_HWDEVICE_TYPE_D3D11VA, gpu.Device, "Create D3D11 device for QSV");
+#else
+                CreateHardwareDevice(AVHWDeviceType.AV_HWDEVICE_TYPE_VAAPI, gpu.Device, "Create VAAPI device for QSV");
+#endif
+                DeriveHardwareDevice(AVHWDeviceType.AV_HWDEVICE_TYPE_QSV, "Derive QSV encoder device");
+                _codec->hw_device_ctx = ffmpeg.av_buffer_ref(_hardwareDevice);
+                if (_codec->hw_device_ctx == null)
+                {
+                    throw new OutOfMemoryException("Cannot retain the QSV encoder device.");
+                }
+            }
+#endif
+#if UNITY_EDITOR_WIN || UNITY_STANDALONE_WIN
+            if (name.EndsWith("_amf", StringComparison.Ordinal))
+            {
+                // AMF derives its context from a supplied D3D11 device, so the DXGI adapter
+                // selects the GPU; the encoder still uploads the CPU input frames.
+                CreateHardwareDevice(AVHWDeviceType.AV_HWDEVICE_TYPE_D3D11VA, gpu.Device, "Create D3D11 encoder device");
+                _codec->hw_device_ctx = ffmpeg.av_buffer_ref(_hardwareDevice);
+                if (_codec->hw_device_ctx == null)
+                {
+                    throw new OutOfMemoryException("Cannot retain the D3D11 encoder device.");
+                }
+            }
+#endif
+        }
+
+        /// <summary>Creates the candidate's owned FFmpeg hardware device.</summary>
+        /// <param name="type">The FFmpeg hardware device type.</param>
+        /// <param name="device">The device string selecting a GPU, or null for FFmpeg's default device.</param>
+        /// <param name="operation">The operation name reported if creation fails.</param>
+        /// <exception cref="InvalidOperationException">FFmpeg cannot create the device.</exception>
+        private void CreateHardwareDevice(AVHWDeviceType type, string? device, string operation)
+        {
+            AVBufferRef* created = null;
+            var result = ffmpeg.av_hwdevice_ctx_create(&created, type, device, null, 0);
+            _hardwareDevice = created;
+            Check(result, operation);
+        }
+
+        /// <summary>Replaces the candidate's owned hardware device with a device of another type derived from it.</summary>
+        /// <param name="type">The FFmpeg hardware device type to derive.</param>
+        /// <param name="operation">The operation name reported if derivation fails.</param>
+        /// <remarks>The derived device retains its source device, so only the derived reference stays owned.</remarks>
+        /// <exception cref="InvalidOperationException">FFmpeg cannot derive the device.</exception>
+        private void DeriveHardwareDevice(AVHWDeviceType type, string operation)
+        {
+            var source = _hardwareDevice;
+            _hardwareDevice = null;
+            try
+            {
+                AVBufferRef* derived = null;
+                var result = ffmpeg.av_hwdevice_ctx_create_derived(&derived, type, source, 0);
+                _hardwareDevice = derived;
+                Check(result, operation);
+            }
+            finally
+            {
+                ffmpeg.av_buffer_unref(&source);
+            }
+        }
+
+        /// <summary>Captures the opened codec's worker count and threading mode for diagnostics.</summary>
+        /// <param name="hardware">Whether the opened codec compresses on hardware and therefore reports no software workers.</param>
+        /// <remarks>Call after <c>avcodec_open2</c> succeeds; libavcodec lowers the thread count to one for codecs without threading support.</remarks>
+        private void UpdateThreadDiagnostics(bool hardware)
+        {
+            if (hardware)
+            {
+                SoftwareThreadCount = 0;
+                SoftwareThreadingMode = "none";
+                return;
+            }
+
+            SoftwareThreadCount = Math.Max(1, _codec->thread_count);
+            if ((_codec->active_thread_type & ffmpeg.FF_THREAD_FRAME) != 0)
+            {
+                SoftwareThreadingMode = "frame";
+            }
+            else if ((_codec->active_thread_type & ffmpeg.FF_THREAD_SLICE) != 0)
+            {
+                SoftwareThreadingMode = "slice";
+            }
+            else if (SoftwareThreadCount > 1 && _codec->codec != null
+                && (_codec->codec->capabilities & ffmpeg.AV_CODEC_CAP_OTHER_THREADS) != 0)
+            {
+                SoftwareThreadingMode = "codec";
+            }
+            else
+            {
+                SoftwareThreadCount = 1;
+                SoftwareThreadingMode = "none";
+            }
+        }
+
+        /// <summary>Configures explicit rate control options supported by a known implementation.</summary>
+        /// <param name="name">The exact implementation name.</param>
+        /// <exception cref="NotSupportedException">The implementation cannot provide this mode or checked rate limit.</exception>
+        /// <exception cref="InvalidOperationException">An explicit private encoder option is rejected.</exception>
+        private void ConfigureRateControl(string name)
+        {
+            var cbr = _options.RateControlMode == VideoRateControlMode.CBR;
+            if (name == "mpeg4")
+            {
+                // FFmpeg's MPEG4 encoder applies the configured VBV minimum/maximum
+                // and inserts MPEG4 stuffing when constant-rate output needs padding.
+            }
+            else if (name.EndsWith("_nvenc", StringComparison.Ordinal))
+            {
+                SetOption("rc", cbr ? "cbr" : "vbr");
+                if (cbr)
+                {
+                    SetOption("cbr_padding", "1");
+                }
+            }
+            else if (name.EndsWith("_amf", StringComparison.Ordinal))
+            {
+                if (ffmpeg.avcodec_configuration().IndexOf(CheckedAmfConfigurationOption, StringComparison.Ordinal) < 0)
+                {
+                    throw new NotSupportedException("This AMF build lacks the reviewed driver rate-control property checks. Rebuild native libraries with the current AMF source patch and "
+                        + CheckedAmfConfigurationOption + ".");
+                }
+
+                SetOption("rc", cbr ? "cbr" : "vbr_peak");
+                SetOption("enforce_hrd", "1");
+                if (cbr)
+                {
+                    SetOption("filler_data", "1");
+                }
+            }
+            else if (name.EndsWith("_qsv", StringComparison.Ordinal))
+            {
+                if (ffmpeg.avcodec_configuration().IndexOf(CheckedQsvConfigurationMarker, StringComparison.Ordinal) < 0)
+                {
+                    throw new NotSupportedException("This QSV build does not verify the Intel runtime's rate control. Rebuild native libraries with "
+                        + CheckedQsvConfigurationMarker + ".");
+                }
+
+                // QSV has no mode option: it selects CBR when the maximum equals the
+                // target and VBR otherwise, and the native check rejects corrections.
+                if (!cbr && _options.MaximumBitRate == _options.BitRate)
+                {
+                    throw new NotSupportedException("QSV selects CBR when the VBR maximum bitrate equals the target.");
+                }
+            }
+            else if (name.EndsWith("_vaapi", StringComparison.Ordinal))
+            {
+                SetOption("rc_mode", cbr ? "CBR" : "VBR");
+            }
+            else if (name.EndsWith("_mediacodec", StringComparison.Ordinal))
+            {
+                if (!_mediaCodecSelection.HasValue)
+                {
+                    throw new NotSupportedException("MediaCodec requires a verified hardware component supporting the requested rate-control mode.");
+                }
+
+                // Opening by exact name prevents MIME lookup from choosing a software component.
+                SetOption("codec_name", _mediaCodecSelection.Value.ComponentName);
+                // The NDK API needs no JVM attachment on the encoder worker.
+                SetOption("ndk_codec", "1");
+                // MediaCodec receives only the target and mode; it has no peak-rate or VBV key.
+                SetOption("bitrate_mode", cbr ? "cbr" : "vbr");
+            }
+            else if (name == "h264_videotoolbox")
+            {
+                SetOption("allow_sw", "0");
+                SetOption("require_sw", "0");
+                SetOption("constant_bit_rate", cbr ? "1" : "0");
+            }
+            else if (name == "libx264")
+            {
+                SetOption("preset", "veryfast");
+                // VBR HRD signaling is compatible with MP4. Equal VBV target/maximum
+                // and independent filler still select x264's actual CBR rate control.
+                SetOption("nal-hrd", "vbr");
+                // Unlike x264-params, this parser returns an error for rejected keys.
+                SetOption("x264opts", "sync-lookahead=0:rc-lookahead=0:lookahead-threads=1:filler=" + (cbr ? "1" : "0"));
+            }
+            else if (name == "libx265")
+            {
+                if (ffmpeg.avcodec_configuration().IndexOf(CheckedX265ConfigurationMarker, StringComparison.Ordinal) < 0)
+                {
+                    throw new NotSupportedException("This x265 wrapper does not reject ignored encoder parameters. Rebuild native libraries with "
+                        + CheckedX265ConfigurationMarker + ".");
+                }
+
+                SetOption("preset", "veryfast");
+                // A pool of exactly thread_count workers encodes wavefront rows, so the
+                // configured maximum still bounds compute threads. Frame threads only
+                // pipeline consecutive frames and follow x265's own CPU-count defaults;
+                // a single worker keeps x265 entirely on the calling thread.
+                var workers = _codec->thread_count;
+                var frameThreads = workers >= 16 ? 5 : workers >= 8 ? 3 : workers >= 4 ? 2 : 1;
+                var pools = workers > 1 ? workers.ToString(CultureInfo.InvariantCulture) : "none";
+                SetOption("x265-params", "pools=" + pools + ":frame-threads=" + frameThreads.ToString(CultureInfo.InvariantCulture)
+                    + ":wpp=" + (workers > 1 ? "1" : "0") + ":strict-cbr=" + (cbr ? "1" : "0"));
+            }
+            else if (name == "libvpx-vp9" || name == "libaom-av1")
+            {
+                // With CRF unset, equal min/max/target selects CBR; otherwise the
+                // good-quality defaults select one-pass VBR. The rate limit is a
+                // native budget, rather than a hard bound on compressed payload.
+                SetOption("crf", "-1");
+                SetOption("cpu-used", "6");
+                SetOption("lag-in-frames", "0");
+                SetOption("drop-threshold", "0");
+                SetOption("undershoot-pct", "0");
+                SetOption("overshoot-pct", "0");
+                // Without row-based threading libvpx parallelizes only across tile
+                // columns, which leaves most codec workers idle at common sizes.
+                SetOption("row-mt", "1");
+                if (name == "libvpx-vp9")
+                {
+                    SetOption("deadline", "good");
+                }
+                else
+                {
+                    SetOption("usage", "good");
+                    var percentage = (MaximumBitRate * 100 / _options.BitRate).ToString(CultureInfo.InvariantCulture);
+                    SetOption("aom-params", "max-intra-rate=" + percentage + ":max-inter-rate=" + percentage);
+                }
+            }
+            else
+            {
+                throw new NotSupportedException("The encoder's rate control contract is unknown.");
+            }
+        }
+
+        /// <summary>Assigns one checked encoder-private option before opening the codec.</summary>
+        /// <param name="name">The private option name.</param>
+        /// <param name="value">The option value or named constant.</param>
+        /// <exception cref="InvalidOperationException">FFmpeg rejects the option or its value.</exception>
+        private void SetOption(string name, string value)
+        {
+            Check(ffmpeg.av_opt_set(_codec->priv_data, name, value, 0), "Set encoder " + name);
+        }
+
+        /// <summary>Selects a supported CPU input format that the capture converter can produce.</summary>
+        /// <param name="codec">The borrowed candidate codec.</param>
+        /// <returns>A supported YUV420P or NV12 input format.</returns>
+        /// <exception cref="NotSupportedException">The codec provides no compatible 8-bit CPU input format.</exception>
+        /// <exception cref="InvalidOperationException">FFmpeg cannot report supported configurations.</exception>
+        private AVPixelFormat ChooseSoftwarePixelFormat(AVCodec* codec)
+        {
+            void* configurations = null;
+            var count = 0;
+            Check(ffmpeg.avcodec_get_supported_config(_codec, codec, AVCodecConfig.AV_CODEC_CONFIG_PIX_FORMAT,
+                0, &configurations, &count), "Query encoder pixel formats");
+            if (configurations == null)
+            {
+                return AVPixelFormat.AV_PIX_FMT_YUV420P;
+            }
+
+            var formats = (AVPixelFormat*)configurations;
+            for (var i = 0; i < count; i++)
+            {
+                if (formats[i] == AVPixelFormat.AV_PIX_FMT_YUV420P || formats[i] == AVPixelFormat.AV_PIX_FMT_NV12)
+                {
+                    return formats[i];
+                }
+            }
+
+            throw new NotSupportedException("The encoder has no supported YUV420P or NV12 CPU input.");
+        }
+
+        /// <summary>Creates a VAAPI device and an NV12 hardware frame pool for explicit CPU-to-GPU upload.</summary>
+        /// <param name="renderNode">The DRM render node of the selected GPU, or null for FFmpeg's default render node search.</param>
+        /// <exception cref="InvalidOperationException">VAAPI device or pool initialization fails.</exception>
+        /// <exception cref="OutOfMemoryException">A device frame pool reference cannot be allocated.</exception>
+        private void ConfigureVaapi(string? renderNode)
+        {
+            CreateHardwareDevice(AVHWDeviceType.AV_HWDEVICE_TYPE_VAAPI, renderNode, "Create VAAPI encoder device");
+            _hardwareFrames = ffmpeg.av_hwframe_ctx_alloc(_hardwareDevice);
+            if (_hardwareFrames == null)
+            {
+                throw new OutOfMemoryException("Cannot allocate VAAPI encoder frame pool.");
+            }
+
+            var frames = (AVHWFramesContext*)_hardwareFrames->data;
+            frames->format = AVPixelFormat.AV_PIX_FMT_VAAPI;
+            frames->sw_format = AVPixelFormat.AV_PIX_FMT_NV12;
+            frames->width = Width;
+            frames->height = Height;
+            frames->initial_pool_size = 8;
+            Check(ffmpeg.av_hwframe_ctx_init(_hardwareFrames), "Initialize VAAPI encoder frame pool");
+            _codec->hw_frames_ctx = ffmpeg.av_buffer_ref(_hardwareFrames);
+            if (_codec->hw_frames_ctx == null)
+            {
+                throw new OutOfMemoryException("Cannot retain the VAAPI encoder frame pool.");
+            }
+
+            _codec->pix_fmt = AVPixelFormat.AV_PIX_FMT_VAAPI;
+        }
+
+        /// <summary>Allocates padded reusable pixel buffers, packet storage, and, for RGBA input, the multi-threaded color converter.</summary>
+        /// <exception cref="OutOfMemoryException">Native frame, packet, or pixel storage cannot be allocated.</exception>
+        /// <exception cref="NotSupportedException">The encoder input format is neither YUV420P nor NV12.</exception>
+        private void AllocateFrames()
+        {
+            var cpuFormat = _hardwareFrames != null ? AVPixelFormat.AV_PIX_FMT_NV12 : _codec->pix_fmt;
+            if (!CaptureFrameConverter.Supports(cpuFormat))
+            {
+                throw new NotSupportedException("The capture converter cannot produce " + cpuFormat + " encoder input.");
+            }
+
+            _frame = AllocateFrame(cpuFormat);
+            _hardwareFrame = ffmpeg.av_frame_alloc();
+            _packet = ffmpeg.av_packet_alloc();
+            if (_hardwareFrame == null || _packet == null)
+            {
+                throw new OutOfMemoryException("Cannot allocate encoder frame or packet storage.");
+            }
+
+            if (_inputLayout == CapturePixelLayout.Nv12)
+            {
+                // GPU-converted input is only copied into the planes, so no converter threads exist.
+                return;
+            }
+
+            // Workers split output rows, so small frames do not spawn idle converter threads.
+            _converter = new CaptureFrameConverter(Width, Height, _options.MaximumSoftwareThreads);
+            ConverterThreadCount = _converter.ThreadCount;
+        }
+
+        /// <summary>Allocates an aligned pixel frame with SDR BT.709 primaries/matrix and an sRGB transfer curve.</summary>
+        /// <param name="pixelFormat">The CPU pixel format to allocate.</param>
+        /// <returns>A frame owned by the caller.</returns>
+        /// <exception cref="OutOfMemoryException">The native frame or pixel storage cannot be allocated.</exception>
+        private AVFrame* AllocateFrame(AVPixelFormat pixelFormat)
+        {
+            var frame = ffmpeg.av_frame_alloc();
+            if (frame == null)
+            {
+                throw new OutOfMemoryException("Cannot allocate capture pixel frame.");
+            }
+
+            frame->format = (int)pixelFormat;
+            frame->width = Width;
+            frame->height = Height;
+            frame->color_range = AVColorRange.AVCOL_RANGE_MPEG;
+            frame->colorspace = AVColorSpace.AVCOL_SPC_BT709;
+            frame->color_primaries = AVColorPrimaries.AVCOL_PRI_BT709;
+            frame->color_trc = AVColorTransferCharacteristic.AVCOL_TRC_IEC61966_2_1;
+            frame->sample_aspect_ratio = _codec->sample_aspect_ratio;
+            if (ffmpeg.av_frame_get_buffer(frame, 32) < 0)
+            {
+                ffmpeg.av_frame_free(&frame);
+                throw new OutOfMemoryException("Cannot allocate aligned capture pixels.");
+            }
+
+            return frame;
+        }
+
+        /// <summary>Opens a new file atomically and attaches custom seekable I/O to the muxer.</summary>
+        /// <param name="path">The full local output path.</param>
+        /// <exception cref="IOException">The file exists or cannot be opened.</exception>
+        /// <exception cref="UnauthorizedAccessException">Creating the file is not permitted.</exception>
+        /// <exception cref="OutOfMemoryException">The AVIO buffer or context cannot be allocated.</exception>
+        private void OpenLocalFile(string path)
+        {
+            _cancellation.ThrowIfCancellationRequested();
+            _output = FileSystem.File.OpenWrite(path);
+            _selfHandle = GCHandle.Alloc(this);
+            var buffer = (byte*)ffmpeg.av_malloc(65536);
+            if (buffer == null)
+            {
+                throw new OutOfMemoryException("Cannot allocate encoder output buffer.");
+            }
+
+            _io = ffmpeg.avio_alloc_context(buffer, 65536, 1, (void*)GCHandle.ToIntPtr(_selfHandle),
+                null, s_writeCallback, s_seekCallback);
+            if (_io == null)
+            {
+                ffmpeg.av_free(buffer);
+                throw new OutOfMemoryException("Cannot allocate encoder output I/O context.");
+            }
+
+            _io->seekable = ffmpeg.AVIO_SEEKABLE_NORMAL;
+            _format->pb = _io;
+            _format->flags |= ffmpeg.AVFMT_FLAG_CUSTOM_IO;
+        }
+
+        /// <summary>Passes a frame or drain marker to FFmpeg, resolving backpressure by receiving packets before retrying.</summary>
+        /// <param name="frame">The borrowed input frame, or null to begin draining.</param>
+        /// <exception cref="InvalidOperationException">FFmpeg cannot accept the frame or violates its send/receive progress contract.</exception>
+        /// <exception cref="IOException">Writing compressed packets fails.</exception>
+        /// <exception cref="OperationCanceledException">Cancellation was requested.</exception>
+        private void SendFrame(AVFrame* frame)
+        {
+            while (true)
+            {
+                _cancellation.ThrowIfCancellationRequested();
+                int result;
+                // Separate the codec's own time, which includes MediaCodec input copies and waits, from conversion and muxing.
+                using (UnityProfiler.Create(EncoderType == VideoEncoderType.Hardware ? "FFmpeg.Encoder.Hardware.SendFrame" : "FFmpeg.Encoder.Software.SendFrame"))
+                {
+                    result = ffmpeg.avcodec_send_frame(_codec, frame);
+                }
+
+                if (result != -ffmpeg.EAGAIN)
+                {
+                    Check(result, frame == null ? "Drain video encoder" : "Send captured frame");
+                    return;
+                }
+
+                if (ReceivePackets(false) == 0)
+                {
+                    throw new InvalidOperationException("The encoder cannot make progress while handling frame backpressure.");
+                }
+            }
+        }
+
+        /// <summary>Receives and muxes available packets, preserving timestamps and updating video-only bitrate diagnostics.</summary>
+        /// <param name="draining">Whether FFmpeg must reach EOF after accepting its drain marker.</param>
+        /// <returns>The number of packets received during this call.</returns>
+        /// <exception cref="InvalidOperationException">Encoding or muxing fails, or draining returns EAGAIN instead of EOF.</exception>
+        /// <exception cref="IOException">The managed output callback reported a write or seek failure.</exception>
+        /// <exception cref="OperationCanceledException">Cancellation was requested.</exception>
+        private int ReceivePackets(bool draining)
+        {
+            var count = 0;
+            while (true)
+            {
+                _cancellation.ThrowIfCancellationRequested();
+                int result;
+                using (UnityProfiler.Create(EncoderType == VideoEncoderType.Hardware ? "FFmpeg.Encoder.Hardware.ReceivePacket" : "FFmpeg.Encoder.Software.ReceivePacket"))
+                {
+                    result = ffmpeg.avcodec_receive_packet(_codec, _packet);
+                }
+
+                if (result == ffmpeg.AVERROR_EOF)
+                {
+                    return count;
+                }
+
+                if (result == -ffmpeg.EAGAIN)
+                {
+                    if (draining)
+                    {
+                        throw new InvalidOperationException("The encoder requested input after accepting its drain marker.");
+                    }
+
+                    return count;
+                }
+
+                Check(result, "Receive encoded video packet");
+                try
+                {
+                    var bytes = _packet->size;
+                    var timestamp = _packet->pts != ffmpeg.AV_NOPTS_VALUE ? _packet->pts : _packet->dts;
+                    var start = timestamp == ffmpeg.AV_NOPTS_VALUE ? _latestPacketEnd : timestamp / (double)FrameRate;
+                    var duration = Math.Max(1L, _packet->duration) / (double)FrameRate;
+                    _bitRateTracker.Add(start, duration, bytes);
+                    _latestPacketEnd = Math.Max(_latestPacketEnd, start + duration);
+                    ffmpeg.av_packet_rescale_ts(_packet, _codec->time_base, _stream->time_base);
+                    if (_packet->duration <= 0)
+                    {
+                        _packet->duration = ffmpeg.av_rescale_q(1, _codec->time_base, _stream->time_base);
+                    }
+
+                    _packet->stream_index = _stream->index;
+                    using (UnityProfiler.Create("FFmpeg.Encoder.WritePacket"))
+                    {
+                        CheckOutput(ffmpeg.av_interleaved_write_frame(_format, _packet), "Mux encoded video packet");
+                    }
+
+                    Interlocked.Add(ref _bytesWritten, bytes);
+                    Interlocked.Exchange(ref _currentBitRate, _bitRateTracker.Measure(_latestPacketEnd));
+                    count++;
+                }
+                finally
+                {
+                    ffmpeg.av_packet_unref(_packet);
+                }
+            }
+        }
+
+        /// <summary>Writes borrowed FFmpeg bytes to the local file without throwing across the native callback boundary.</summary>
+        /// <param name="opaque">The handle identifying this encoder.</param>
+        /// <param name="buffer">The borrowed bytes to write.</param>
+        /// <param name="length">The number of bytes to write.</param>
+        /// <returns>The number of bytes written, or a negative FFmpeg error.</returns>
+        [MonoPInvokeCallback(typeof(avio_alloc_context_write_packet))]
+        private static int WriteOutput(void* opaque, byte* buffer, int length)
+        {
+            FFmpegVideoEncoder? self = null;
+            try
+            {
+                self = (FFmpegVideoEncoder)GCHandle.FromIntPtr((IntPtr)opaque).Target!;
+                if (self._cancellation.IsCancellationRequested)
+                {
+                    return ffmpeg.AVERROR_EXIT;
+                }
+
+                self._output!.Write(new ReadOnlySpan<byte>(buffer, length));
+                return length;
+            }
+            catch (Exception error)
+            {
+                if (self != null)
+                {
+                    self._ioError ??= error;
+                }
+
+                return -5;
+            }
+        }
+
+        /// <summary>Seeks the local output for seekable muxers without throwing across the native callback boundary.</summary>
+        /// <param name="opaque">The handle identifying this encoder.</param>
+        /// <param name="offset">The requested byte offset.</param>
+        /// <param name="whence">The seek origin or AVSEEK_SIZE query flag.</param>
+        /// <returns>The file position or length, or a negative FFmpeg error.</returns>
+        [MonoPInvokeCallback(typeof(avio_alloc_context_seek))]
+        private static long SeekOutput(void* opaque, long offset, int whence)
+        {
+            FFmpegVideoEncoder? self = null;
+            try
+            {
+                self = (FFmpegVideoEncoder)GCHandle.FromIntPtr((IntPtr)opaque).Target!;
+                if (self._cancellation.IsCancellationRequested)
+                {
+                    return ffmpeg.AVERROR_EXIT;
+                }
+
+                if ((whence & ffmpeg.AVSEEK_SIZE) != 0)
+                {
+                    return self._output!.Length;
+                }
+
+                whence &= ~ffmpeg.AVSEEK_FORCE;
+                if (whence < 0 || whence > 2)
+                {
+                    return -22;
+                }
+
+                return self._output!.Seek(offset, (SeekOrigin)whence);
+            }
+            catch (Exception error)
+            {
+                if (self != null)
+                {
+                    self._ioError ??= error;
+                }
+
+                return -5;
+            }
+        }
+
+        /// <summary>Checks cancellation, managed callback errors, native return values, and deferred AVIO errors.</summary>
+        /// <param name="result">The native status code.</param>
+        /// <param name="operation">The diagnostic operation name.</param>
+        /// <exception cref="OperationCanceledException">Cancellation was requested.</exception>
+        /// <exception cref="IOException">A local file callback failed.</exception>
+        /// <exception cref="InvalidOperationException">FFmpeg reported failure.</exception>
+        private void CheckOutput(int result, string operation)
+        {
+            _cancellation.ThrowIfCancellationRequested();
+            if (_ioError != null)
+            {
+                throw new IOException(operation + " failed while accessing the local output.", _ioError);
+            }
+
+            Check(result, operation);
+            // Build the I/O message only on failure: this runs for every packet, and concatenating it would allocate each time.
+            if (_io != null && _io->error < 0)
+            {
+                Check(_io->error, operation + " I/O");
+            }
+        }
+
+        /// <summary>Maps the requested public format to its FFmpeg codec identifier.</summary>
+        /// <param name="format">The validated public video format.</param>
+        /// <returns>The matching native codec identifier.</returns>
+        private static AVCodecID GetCodecId(VideoEncodingFormat format) => format switch
+        {
+            VideoEncodingFormat.H264 => AVCodecID.AV_CODEC_ID_H264,
+            VideoEncodingFormat.HEVC => AVCodecID.AV_CODEC_ID_HEVC,
+            VideoEncodingFormat.VP9 => AVCodecID.AV_CODEC_ID_VP9,
+            VideoEncodingFormat.AV1 => AVCodecID.AV_CODEC_ID_AV1,
+            _ => AVCodecID.AV_CODEC_ID_MPEG4
+        };
+
+        /// <summary>Rejects native library ABI versions that do not match the repository's bindings.</summary>
+        /// <param name="library">The native library short name.</param>
+        /// <param name="version">The library's packed version.</param>
+        /// <exception cref="NotSupportedException">The loaded ABI major differs from the bindings.</exception>
+        private static void CheckVersion(string library, uint version)
+        {
+            var expected = ffmpeg.LibraryVersionMap[library];
+            if ((version >> 16) != expected)
+            {
+                throw new NotSupportedException(library + " ABI mismatch: expected " + expected + ", loaded " + (version >> 16) + ".");
+            }
+        }
+
+        /// <summary>Translates a negative native result through the existing FFmpeg diagnostic helper.</summary>
+        /// <param name="result">The native status code.</param>
+        /// <param name="operation">The operation name included in failures.</param>
+        /// <exception cref="InvalidOperationException">The native result is negative.</exception>
+        private static void Check(int result, string operation) => FFmpegVideoDecoder.Check(result, operation);
+
+        /// <summary>Checks lifetime and ensures all native operations remain on their owning worker.</summary>
+        /// <exception cref="ObjectDisposedException">This instance has been disposed.</exception>
+        /// <exception cref="InvalidOperationException">The caller is on a different thread from the owner.</exception>
+        private void EnsureOwner()
+        {
+            if (_disposed)
+            {
+                throw new ObjectDisposedException(nameof(FFmpegVideoEncoder));
+            }
+
+            if (_ownerThread != 0 && _ownerThread != Thread.CurrentThread.ManagedThreadId)
+            {
+                throw new InvalidOperationException("FFmpeg encoder operations must remain on their owning worker thread.");
+            }
+        }
+
+        /// <summary>Checks that the encoder is open and has not been finalized.</summary>
+        /// <exception cref="ObjectDisposedException">This instance has been disposed.</exception>
+        /// <exception cref="InvalidOperationException">The encoder is closed, finalized, or called from another thread.</exception>
+        private void EnsureOpen()
+        {
+            EnsureOwner();
+            if (!_opened || _completed)
+            {
+                throw new InvalidOperationException("The encoder must be open and not finalized.");
+            }
+        }
+
+        /// <summary>Releases one codec candidate and its optional hardware device and frame pool.</summary>
+        private void ReleaseCodec()
+        {
+            var codec = _codec;
+            _codec = null;
+            if (codec != null)
+            {
+                ffmpeg.avcodec_free_context(&codec);
+            }
+
+            var frames = _hardwareFrames;
+            _hardwareFrames = null;
+            if (frames != null)
+            {
+                ffmpeg.av_buffer_unref(&frames);
+            }
+
+            var device = _hardwareDevice;
+            _hardwareDevice = null;
+            if (device != null)
+            {
+                ffmpeg.av_buffer_unref(&device);
+            }
+        }
+
+        /// <summary>Releases all native and local-file resources without implicitly completing a canceled or failed recording.</summary>
+        /// <remarks>Call Complete first for a playable finalized file. Repeated disposal has no effect.</remarks>
+        /// <exception cref="InvalidOperationException">The caller is not the owning worker.</exception>
+        /// <exception cref="IOException">Closing the local file fails.</exception>
+        public void Dispose()
+        {
+            if (_disposed)
+            {
+                return;
+            }
+
+            EnsureOwner();
+            _disposed = true;
+            var frame = _frame;
+            _frame = null;
+            if (frame != null)
+            {
+                ffmpeg.av_frame_free(&frame);
+            }
+            var hardwareFrame = _hardwareFrame;
+            _hardwareFrame = null;
+            if (hardwareFrame != null)
+            {
+                ffmpeg.av_frame_free(&hardwareFrame);
+            }
+            var packet = _packet;
+            _packet = null;
+            if (packet != null)
+            {
+                ffmpeg.av_packet_free(&packet);
+            }
+            _converter?.Dispose();
+            _converter = null;
+
+            ReleaseCodec();
+            if (_format != null)
+            {
+                _format->pb = null;
+                ffmpeg.avformat_free_context(_format);
+                _format = null;
+                _stream = null;
+            }
+
+            var io = _io;
+            _io = null;
+            if (io != null)
+            {
+                ffmpeg.av_free(io->buffer);
+                io->buffer = null;
+                ffmpeg.avio_context_free(&io);
+            }
+
+            if (_selfHandle.IsAllocated)
+            {
+                _selfHandle.Free();
+            }
+
+            var output = _output;
+            _output = null;
+            output?.Dispose();
+        }
+    }
+}

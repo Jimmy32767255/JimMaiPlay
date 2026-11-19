@@ -1,4 +1,5 @@
 ﻿using MajdataPlay.Buffers;
+using MajdataPlay.Diagnostics;
 using MajdataPlay.IO;
 using MajdataPlay.Scenes.Game.Utils;
 using MajdataPlay.Utils;
@@ -13,74 +14,103 @@ namespace MajdataPlay.Scenes.Game.Notes.Controllers
 {
     public sealed class NoteEffectPool : MonoBehaviour
     {
-        bool _isInited = false;
+        private bool _isInited = false;
 
         [SerializeField]
         [FormerlySerializedAs("tapEffectPrefab")]
-        GameObject _tapEffectPrefab;
+        private GameObject _tapEffectPrefab;
+
         [SerializeField]
         [FormerlySerializedAs("touchHoldEffectPrefab")]
-        GameObject _touchHoldEffectPrefab;
+        private GameObject _touchHoldEffectPrefab;
+
         [SerializeField]
         [FormerlySerializedAs("touchEffectPrefab")]
-        GameObject _touchEffectPrefab;
+        private GameObject _touchEffectPrefab;
+
         [SerializeField]
         [FormerlySerializedAs("holdEffectPrefab")]
-        GameObject _holdEffectPrefab;
+        private GameObject _holdEffectPrefab;
+
         [SerializeField]
         [FormerlySerializedAs("_touchFeedbackEffectPrefab")]
-        GameObject _touchFeedbackEffectPrefab;
+        private GameObject _touchFeedbackEffectPrefab;
 
-        TapEffectDisplayer[] _tapJudgeEffects = new TapEffectDisplayer[8];
-        TouchHoldEffectDisplayer[] _touchHoldJudgeEffects = new TouchHoldEffectDisplayer[33];
-        TouchEffectDisplayer[] _touchJudgeEffects = new TouchEffectDisplayer[33];
+        private TapEffectDisplayer[] _tapJudgeEffects = new TapEffectDisplayer[8];
+        private TouchHoldEffectDisplayer[] _touchHoldJudgeEffects = new TouchHoldEffectDisplayer[33];
+        private TouchEffectDisplayer[] _touchJudgeEffects = new TouchEffectDisplayer[33];
 
-        HoldEffectDisplayer[] _holdEffects = new HoldEffectDisplayer[8];
-        HoldEffectDisplayer[] _touchHoldEffects = new HoldEffectDisplayer[33];
+        private HoldEffectDisplayer[] _holdEffects = new HoldEffectDisplayer[8];
+        private HoldEffectDisplayer[] _touchHoldEffects = new HoldEffectDisplayer[33];
 
-        TouchFeedbackDisplayer[] _touchFeedbackEffects = new TouchFeedbackDisplayer[33];
+        private TouchFeedbackDisplayer[] _touchFeedbackEffects = new TouchFeedbackDisplayer[33];
 
-        TapEffectDisplayer[] _rentedArrayForGeneratedTapEffectDisplayers = Array.Empty<TapEffectDisplayer>();
-        TouchEffectDisplayer[] _rentedArrayForGeneratedTouchEffectDisplayers = Array.Empty<TouchEffectDisplayer>();
+        private PooledArray<TapEffectDisplayer> _rentedArrayForGeneratedTapEffectDisplayers = default;
+        private PooledArray<HoldEffectDisplayer> _rentedArrayForGeneratedHoldEffectDisplayers = default;
+        private PooledArray<TouchEffectDisplayer> _rentedArrayForGeneratedTouchEffectDisplayers = default;
 
-        ReadOnlyMemory<TapEffectDisplayer> _generatedTapEffectDisplayers = Array.Empty<TapEffectDisplayer>();
-        ReadOnlyMemory<TouchEffectDisplayer> _generatedTouchEffectDisplayers = Array.Empty<TouchEffectDisplayer>();
+        private ReadOnlyMemory<TapEffectDisplayer> _generatedTapEffectDisplayers = Array.Empty<TapEffectDisplayer>();
+        private ReadOnlyMemory<HoldEffectDisplayer> _generatedHoldEffectDisplayers = Array.Empty<HoldEffectDisplayer>();
+        private ReadOnlyMemory<TouchEffectDisplayer> _generatedTouchEffectDisplayers = Array.Empty<TouchEffectDisplayer>();
 
-        GamePlayManager _gpManager;
+        private GamePlayManager _gpManager;
 
-        void Awake()
+        private FireworkDisplayer _fireworkDisplayer;
+
+        private void Awake()
         {
             Majdata<NoteEffectPool>.Instance = this;
         }
+        private void Start()
+        {
+            _fireworkDisplayer = Majdata<FireworkDisplayer>.Instance!;
+        }
         internal void Reset()
         {
+            // Keys and sensors the chart never uses have no effect displayer, so their slots are null.
             foreach (var effect in _tapJudgeEffects)
             {
-                effect.Reset();
+                if (effect != null)
+                {
+                    effect.Reset();
+                }
             }
             foreach (var effect in _touchHoldJudgeEffects)
             {
-                effect.Reset();
+                if (effect != null)
+                {
+                    effect.Reset();
+                }
             }
             foreach (var effect in _touchJudgeEffects)
             {
-                effect.Reset();
+                if (effect != null)
+                {
+                    effect.Reset();
+                }
             }
             foreach (var effect in _holdEffects)
             {
-                effect.Reset();
+                if (effect != null)
+                {
+                    effect.Reset();
+                }
             }
             foreach (var effect in _touchHoldEffects)
             {
-                effect.Reset();
+                if (effect != null)
+                {
+                    effect.Reset();
+                }
             }
         }
 
-        void OnDestroy()
+        private void OnDestroy()
         {
             Majdata<NoteEffectPool>.Free();
-            Pool<TapEffectDisplayer>.ReturnArray(_rentedArrayForGeneratedTapEffectDisplayers);
-            Pool<TouchEffectDisplayer>.ReturnArray(_rentedArrayForGeneratedTouchEffectDisplayers);
+            _rentedArrayForGeneratedTapEffectDisplayers.Dispose();
+            _rentedArrayForGeneratedTouchEffectDisplayers.Dispose();
+            _rentedArrayForGeneratedHoldEffectDisplayers.Dispose();
         }
         internal void Init()
         {
@@ -89,8 +119,9 @@ namespace MajdataPlay.Scenes.Game.Notes.Controllers
                 return;
             }
             _isInited = false;
-            using var generatedTapEffectDisplayers = new RentedList<TapEffectDisplayer>();
-            using var generatedTouchEffectDisplayers = new RentedList<TouchEffectDisplayer>();
+            using var generatedTapEffectDisplayers = new PooledList<TapEffectDisplayer>();
+            using var generatedHoldEffectDisplayers = new PooledList<HoldEffectDisplayer>();
+            using var generatedTouchEffectDisplayers = new PooledList<TouchEffectDisplayer>();
             var tapParent = transform.GetChild(0);
             var touchParent = transform.GetChild(1);
             var touchHoldParent = transform.GetChild(2);
@@ -114,9 +145,11 @@ namespace MajdataPlay.Scenes.Game.Notes.Controllers
                 obj.name = $"TapEffect_{i + 1}";
                 obj.transform.rotation = rotation;
                 if (_gpManager != null && _gpManager.IsClassicMode)
-                    obj.transform.GetChild(0).localScale = new Vector3(1.4f, 1.4f, 0);
+                {
+                    obj.transform.GetChild(0).localScale = new Vector3(1.4f, 1.4f, 1f);
+                }
                 var displayer = obj.GetComponent<TapEffectDisplayer>();
-                displayer.DistanceRatio = MajInstances.Settings.Display.OuterJudgeDistance;
+                displayer.DistanceRatio = MajEnv.UserSettings.Judge.OuterJudgeDistance;
                 displayer.ResetAll();
                 _tapJudgeEffects[i] = displayer;
                 generatedTapEffectDisplayers.Add(displayer);
@@ -130,7 +163,7 @@ namespace MajdataPlay.Scenes.Game.Notes.Controllers
                 var sensorPos = (SensorArea)i;
                 var obj = Instantiate(_touchEffectPrefab, touchParent);
                 var displayer = obj.GetComponent<TouchEffectDisplayer>();
-                displayer.DistanceRatio = MajInstances.Settings.Display.InnerJudgeDistance;
+                displayer.DistanceRatio = MajEnv.UserSettings.Judge.InnerJudgeDistance;
                 obj.name = $"TouchEffect_{sensorPos}";
                 displayer.SensorPos = sensorPos;
                 displayer.ResetAll();
@@ -151,6 +184,7 @@ namespace MajdataPlay.Scenes.Game.Notes.Controllers
                 displayer.Position = position;
                 displayer.Reset();
                 _holdEffects[i] = displayer;
+                generatedHoldEffectDisplayers.Add(displayer);
             }
             for (var i = 0; i < 33; i++)
             {
@@ -174,12 +208,13 @@ namespace MajdataPlay.Scenes.Game.Notes.Controllers
                 var rotation = NoteHelper.GetTouchRoation(NoteHelper.GetTouchAreaPosition(sensorPos), sensorPos);
                 var displayer4Hold = obj4Hold.GetComponent<TouchHoldEffectDisplayer>();
                 obj4Hold.transform.rotation = rotation;
-                displayer4Hold.DistanceRatio = MajInstances.Settings.Display.InnerJudgeDistance;
+                displayer4Hold.DistanceRatio = MajEnv.UserSettings.Judge.InnerJudgeDistance;
                 displayer4Hold.LocalPosition = position2;
                 obj4Hold.name = $"TouchHoldEffect_{sensorPos}";
                 displayer4Hold.ResetAll();
                 _touchHoldJudgeEffects[i] = displayer4Hold;
                 generatedTapEffectDisplayers.Add(displayer4Hold);
+                generatedHoldEffectDisplayers.Add(displayer);
             }
             // Touch Feedback Effect
             for (var i = 0; i < 33; i++)
@@ -190,23 +225,26 @@ namespace MajdataPlay.Scenes.Game.Notes.Controllers
                 if (pos < SensorArea.B1)
                 {
                     var position = NoteHelper.GetTapPosition(i + 1, 4.8f);
-                    obj.transform.position = position;
+                    NoteHelper.Sorting.SetPosition(obj.transform, position);
                 }
                 else
                 {
                     var position = NoteHelper.GetTouchAreaPosition(pos);
-                    obj.transform.position = position;
+                    NoteHelper.Sorting.SetPosition(obj.transform, position);
                 }
                 var displayer = obj.GetComponent<TouchFeedbackDisplayer>();
                 displayer.Reset();
                 obj.transform.localScale = new Vector3(0.5f, 0.5f, 1);
                 _touchFeedbackEffects[i] = displayer;
             }
-            _rentedArrayForGeneratedTapEffectDisplayers = Pool<TapEffectDisplayer>.RentArray(generatedTapEffectDisplayers.Count);
-            _rentedArrayForGeneratedTouchEffectDisplayers = Pool<TouchEffectDisplayer>.RentArray(generatedTouchEffectDisplayers.Count);
+            _rentedArrayForGeneratedTapEffectDisplayers = Pool<TapEffectDisplayer>.Rent(generatedTapEffectDisplayers.Count);
+            _rentedArrayForGeneratedHoldEffectDisplayers = Pool<HoldEffectDisplayer>.Rent(generatedHoldEffectDisplayers.Count);
+            _rentedArrayForGeneratedTouchEffectDisplayers = Pool<TouchEffectDisplayer>.Rent(generatedTouchEffectDisplayers.Count);
             generatedTapEffectDisplayers.CopyTo(_rentedArrayForGeneratedTapEffectDisplayers);
+            generatedHoldEffectDisplayers.CopyTo(_rentedArrayForGeneratedHoldEffectDisplayers);
             generatedTouchEffectDisplayers.CopyTo(_rentedArrayForGeneratedTouchEffectDisplayers);
             _generatedTapEffectDisplayers = _rentedArrayForGeneratedTapEffectDisplayers.AsMemory(0, generatedTapEffectDisplayers.Count);
+            _generatedHoldEffectDisplayers = _rentedArrayForGeneratedHoldEffectDisplayers.AsMemory(0, generatedHoldEffectDisplayers.Count);
             _generatedTouchEffectDisplayers = _rentedArrayForGeneratedTouchEffectDisplayers.AsMemory(0, generatedTouchEffectDisplayers.Count);
 
             _isInited = true;
@@ -223,9 +261,11 @@ namespace MajdataPlay.Scenes.Game.Notes.Controllers
                     return;
                 }
                 var s1 = _generatedTapEffectDisplayers.Span;
-                var s2 = _generatedTouchEffectDisplayers.Span;
+                var s2 = _generatedHoldEffectDisplayers.Span;
+                var s3 = _generatedTouchEffectDisplayers.Span;
                 var count1 = _generatedTapEffectDisplayers.Length;
-                var count2 = _generatedTouchEffectDisplayers.Length;
+                var count2 = _generatedHoldEffectDisplayers.Length;
+                var count3 = _generatedTouchEffectDisplayers.Length;
 
                 for (var i = 0; i < count1; i++)
                 {
@@ -235,16 +275,11 @@ namespace MajdataPlay.Scenes.Game.Notes.Controllers
                 {
                     s2[i].OnLateUpdate();
                 }
-
-                //for (var i = 0; i < 33; i++)
-                //{
-                //    _touchJudgeEffects[i].OnLateUpdate();
-                //    _touchHoldJudgeEffects[i].OnLateUpdate();
-                //}
-                //for (var i = 0; i < 8; i++)
-                //{
-                //    _tapJudgeEffects[i].OnLateUpdate();
-                //}
+                for (var i = 0; i < count3; i++)
+                {
+                    s3[i].OnLateUpdate();
+                }
+                _fireworkDisplayer.OnLateUpdate();
             }
         }
         /// <summary>
@@ -255,7 +290,7 @@ namespace MajdataPlay.Scenes.Game.Notes.Controllers
         [Il2CppSetOption(Option.NullChecks, false)]
         [Il2CppSetOption(Option.ArrayBoundsChecks, false)]
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        public void Play(in NoteJudgeResult judgeResult, int keyIndex)
+        public void PlayTapJudgeResult(in NoteJudgeResult judgeResult, int keyIndex)
         {
             var effectDisplayer = _tapJudgeEffects[keyIndex - 1];
             effectDisplayer.Play(judgeResult);
@@ -268,7 +303,7 @@ namespace MajdataPlay.Scenes.Game.Notes.Controllers
         [Il2CppSetOption(Option.NullChecks, false)]
         [Il2CppSetOption(Option.ArrayBoundsChecks, false)]
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        public void Play(in NoteJudgeResult judgeResult, SensorArea sensorPos)
+        public void PlayTouchJudgeResult(in NoteJudgeResult judgeResult, SensorArea sensorPos)
         {
             var effectDisplayer = _touchJudgeEffects[(int)sensorPos];
             effectDisplayer.Play(judgeResult);
@@ -281,7 +316,7 @@ namespace MajdataPlay.Scenes.Game.Notes.Controllers
         [Il2CppSetOption(Option.NullChecks, false)]
         [Il2CppSetOption(Option.ArrayBoundsChecks, false)]
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        public void PlayTouchHoldEffect(in NoteJudgeResult judgeResult, SensorArea sensorPos)
+        public void PlayTouchHoldJudgeResult(in NoteJudgeResult judgeResult, SensorArea sensorPos)
         {
             var effectDisplayer = _touchHoldJudgeEffects[(int)sensorPos];
             effectDisplayer.Play(judgeResult);

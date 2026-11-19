@@ -1,5 +1,6 @@
 ﻿using MajdataPlay.Scenes.Game.Notes;
 using MajdataPlay.Utils;
+using MajdataPlay.Scenes.Game.Utils;
 using Unity.IL2CPP.CompilerServices;
 using UnityEngine;
 #nullable enable
@@ -9,15 +10,21 @@ namespace MajdataPlay.Scenes.Game
     [Il2CppSetOption(Option.ArrayBoundsChecks, false)]
     internal sealed class HoldEffectDisplayer: MajComponent
     {
+        /// <summary>
+        /// Gets the world position or updates its X and Y coordinates while preserving sorting depth.
+        /// </summary>
         public Vector3 Position
         {
             get => Transform.position;
-            set => Transform.position = value;
+            set => NoteHelper.Sorting.SetPosition(Transform, value);
         }
+        /// <summary>
+        /// Gets the local position or updates its X and Y coordinates while preserving sorting depth.
+        /// </summary>
         public Vector3 LocalPosition
         {
             get => Transform.localPosition;
-            set => Transform.localPosition = value;
+            set => NoteHelper.Sorting.SetLocalPosition(Transform, value);
         }
 
         Material _material;
@@ -26,6 +33,7 @@ namespace MajdataPlay.Scenes.Game
         
         bool _isPlaying = false;
         Color _color = WHITE;
+        Color _newColor = WHITE;
 
         static readonly int MATERIAL_COLOR_ID = Shader.PropertyToID("_Color");
         static readonly Color YELLOW = new Color(1f, 227f / 255f, 0f);
@@ -48,7 +56,9 @@ namespace MajdataPlay.Scenes.Game
         public void Play(in JudgeGrade judgeType)
         {
             if (_isPlaying)
+            {
                 return;
+            }
             _isPlaying = true;
 
             var newColor = WHITE;
@@ -80,8 +90,20 @@ namespace MajdataPlay.Scenes.Game
                 return;
             }
             SetActive(true);
-            _material.SetColor(MATERIAL_COLOR_ID, newColor);
-            _color = newColor;
+            _newColor = newColor;
+        }
+        internal void OnLateUpdate()
+        {
+            if(!Active)
+            {
+                return;
+            }
+            else if(_color == _newColor)
+            {
+                return;
+            }
+            _material.SetColor(MATERIAL_COLOR_ID, _newColor);
+            _color = _newColor;
         }
         public override void SetActive(bool state)
         {

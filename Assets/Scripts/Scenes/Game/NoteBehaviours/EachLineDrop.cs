@@ -1,4 +1,7 @@
 using MajdataPlay.Buffers;
+using MajdataPlay.Diagnostics;
+using MajdataPlay.Game.Notes;
+using MajdataPlay.Scenes.Game.Utils;
 using MajdataPlay.Scenes.Game.Buffers;
 using MajdataPlay.Scenes.Game.Notes.Controllers;
 using MajdataPlay.Settings;
@@ -35,9 +38,6 @@ namespace MajdataPlay.Scenes.Game.Notes.Behaviours
                 }
             }
         }
-        public IDistanceProvider? DistanceProvider { get; set; }
-        public IStatefulNote? NoteA { get; set; }
-        public IStatefulNote? NoteB { get; set; }
         public NoteStatus State { get; set; } = NoteStatus.Start;
         public bool IsDestroyed => State == NoteStatus.End;
         public NoteQueueInfo QueueInfo => TapQueueInfo.Default;
@@ -50,9 +50,11 @@ namespace MajdataPlay.Scenes.Game.Notes.Behaviours
         float _noteAppearRate = 0.265f;
         
         SpriteRenderer _sr;
-        GameSetting _gameSetting = new();
+        UserSetting _userSetting = new();
         INoteController _noteController;
         NotePoolManager _poolManager;
+
+        IEachLineDistanceProvider _distanceProvider;
         
         static Sprite[] _curvSprites = Array.Empty<Sprite>();
         static bool _isCurvSpritesInited = false;
@@ -62,8 +64,8 @@ namespace MajdataPlay.Scenes.Game.Notes.Behaviours
             base.Awake();
             _noteController = Majdata<INoteController>.Instance!;
             _poolManager = FindObjectOfType<NotePoolManager>();
-            _gameSetting = MajInstances.Settings;
-            _noteAppearRate = _gameSetting.Debug.NoteAppearRate;
+            _userSetting = MajEnv.UserSettings;
+            _noteAppearRate = _userSetting.Game.NoteAppearRate;
             _sr = gameObject.GetComponent<SpriteRenderer>();
             _sr.sprite = null!;
             RendererState = RendererStatus.Off;
@@ -91,25 +93,21 @@ namespace MajdataPlay.Scenes.Game.Notes.Behaviours
             _sr.sprite = _curvSprites[curvLength - 1];
             Transform.localScale = new Vector3(1.225f / 4.8f, 1.225f / 4.8f, 1f);
             Transform.rotation = Quaternion.Euler(0, 0, -45f * (startPosition - 1));
+            NoteHelper.Sorting.Apply(_sr, NoteHelper.Sorting.NoteLayer.TapLines, 100);
             State = NoteStatus.Inited;
             RendererState = RendererStatus.Off;
-            if (DistanceProvider is null)
-            {
-                MajDebug.LogWarning("DistanceProvider not found");
-            }
+            _distanceProvider = poolingInfo.DistanceProvider;
         }
         public void End()
         {
             State = NoteStatus.End;
             RendererState = RendererStatus.Off;
             GameObject.layer = MajEnv.HIDDEN_LAYER;
-            NoteA = null;
-            NoteB = null;
-            DistanceProvider = null;
+            _distanceProvider = null!;
             _poolManager.Collect(this);
         }
         [OnLateUpdate]
-        void OnLateUpdate()
+        internal void OnLateUpdate()
         {
             using (UnityProfiler.Create("EachLineDrop.OnLateUpdate"))
             {
@@ -117,10 +115,14 @@ namespace MajdataPlay.Scenes.Game.Notes.Behaviours
                 {
                     return;
                 }
-                var timing = _noteController.ThisFrameSec - this.timing;
-                var distance = DistanceProvider is not null ? DistanceProvider.Distance : timing * speed + 4.8f;
+                if(_distanceProvider.IsAnyNoteEnded)
+                {
+                    End();
+                    return;
+                }
+                var distance = _distanceProvider.Distance;
                 var scaleRate = _noteAppearRate;
-                var destScale = distance * scaleRate + (1 - scaleRate * 1.225f);
+                var destScale = (distance * scaleRate) + (1 - (scaleRate * 1.225f));
                 var lineScale = Mathf.Abs(distance / 4.8f);
 
                 switch (State)
@@ -152,19 +154,6 @@ namespace MajdataPlay.Scenes.Game.Notes.Behaviours
                         break;
                     case NoteStatus.Running:
                         Transform.localScale = new Vector3(lineScale, lineScale, 1f);
-                        if (NoteA is not null && NoteB is not null)
-                        {
-                            if (NoteA.State == NoteStatus.End || NoteB.State == NoteStatus.End)
-                            {
-                                End();
-                                return;
-                            }
-                        }
-                        else if (timing > 0)
-                        {
-                            End();
-                            return;
-                        }
                         break;
                 }
             }

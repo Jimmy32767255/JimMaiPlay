@@ -12,13 +12,14 @@ using UnityEngine;
 using UnityEngine.Profiling;
 using System.Threading;
 using MajdataPlay.Net;
+using MajdataPlay.Diagnostics;
 
 #nullable enable
 namespace MajdataPlay
 {
-    internal class GameUpdater : MajSingleton
+    [DontDestroyOnLoad]
+    internal class GameUpdater :  MajComponent
     {
-        readonly ReadOnlyRef<GamePlayManager?> _gpManagerRef = new(ref Majdata<GamePlayManager>.Instance);
         DummyTouchPanelRenderer _dummyTouchPanelRenderer;
         DummyLedRenderer _dummyLedRenderer;
 
@@ -30,7 +31,7 @@ namespace MajdataPlay
         protected override void Awake()
         {
             base.Awake();
-            MajInstances.GameUpdater = this;
+            Majdata<GameUpdater>.SetAsSingleton(this);
         }
         void Start()
         {
@@ -77,13 +78,12 @@ namespace MajdataPlay
             MajTimeline.OnPreUpdate();
             InputManager.OnPreUpdate();
             _dummyTouchPanelRenderer.OnPreUpdate();
-            _dummyLedRenderer.OnPreUpdate();
             try
             {
                 switch (SceneSwitcher.CurrentScene)
                 {
                     case MajScenes.Game:
-                        _gpManagerRef.Target?.OnPreUpdate();
+                        Majdata<GamePlayManager>.Instance?.OnPreUpdate();
                         break;
                 }
             }
@@ -123,7 +123,7 @@ namespace MajdataPlay
                 switch (SceneSwitcher.CurrentScene)
                 {
                     case MajScenes.Game:
-                        _gpManagerRef.Target?.OnUpdate();
+                        Majdata<GamePlayManager>.Instance?.OnUpdate();
                         break;
                 }
             }
@@ -140,9 +140,11 @@ namespace MajdataPlay
                 switch (SceneSwitcher.CurrentScene)
                 {
                     case MajScenes.Game:
-                        _gpManagerRef.Target?.OnLateUpdate();
+                        Majdata<GamePlayManager>.Instance?.OnLateUpdate();
                         break;
                 }
+                CabinetLed.OnLateUpdate();
+                _dummyLedRenderer.OnLateUpdate();
             }
             catch (Exception e)
             {

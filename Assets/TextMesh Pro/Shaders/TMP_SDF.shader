@@ -68,6 +68,7 @@ Properties {
 
 	_VertexOffsetX		("Vertex OffsetX", float) = 0
 	_VertexOffsetY		("Vertex OffsetY", float) = 0
+	_ListDepthOffset	("List Depth Offset", Float) = 0
 
 	_MaskCoord			("Mask Coordinates", vector) = (0, 0, 32767, 32767)
 	_ClipRect			("Clip Rect", vector) = (-32767, -32767, 32767, 32767)
@@ -132,7 +133,7 @@ SubShader {
 			UNITY_VERTEX_INPUT_INSTANCE_ID
 			float4	position		: POSITION;
 			float3	normal			: NORMAL;
-			fixed4	color			: COLOR;
+			half4	color			: COLOR;
 			float4	texcoord0		: TEXCOORD0;
 			float2	texcoord1		: TEXCOORD1;
 		};
@@ -142,7 +143,7 @@ SubShader {
 			UNITY_VERTEX_INPUT_INSTANCE_ID
 			UNITY_VERTEX_OUTPUT_STEREO
 			float4	position		: SV_POSITION;
-			fixed4	color			: COLOR;
+			half4	color			: COLOR;
 			float2	atlas			: TEXCOORD0;		// Atlas
 			float4	param			: TEXCOORD1;		// alphaClip, scale, bias, weight
 			float4	mask			: TEXCOORD2;		// Position in object space(xy), pixel Size(zw)
@@ -150,7 +151,7 @@ SubShader {
 
 		    #if (UNDERLAY_ON || UNDERLAY_INNER)
 			float4	texcoord2		: TEXCOORD4;		// u,v, scale, bias
-			fixed4	underlayColor	: COLOR1;
+			half4	underlayColor	: COLOR1;
 		    #endif
 
 		    float4 textures			: TEXCOORD5;
@@ -159,6 +160,7 @@ SubShader {
 		// Used by Unity internally to handle Texture Tiling and Offset.
 		float4 _FaceTex_ST;
 		float4 _OutlineTex_ST;
+		float _ListDepthOffset;
 		float _UIMaskSoftnessX;
         float _UIMaskSoftnessY;
         int _UIVertexColorAlwaysGammaSpace;
@@ -177,6 +179,7 @@ SubShader {
 			float4 vert = input.position;
 			vert.x += _VertexOffsetX;
 			vert.y += _VertexOffsetY;
+			vert.z += _ListDepthOffset;
 
 			float4 vPosition = UnityObjectToClipPos(vert);
 
@@ -243,7 +246,7 @@ SubShader {
 		}
 
 
-		fixed4 PixShader(pixel_t input) : SV_Target
+		half4 PixShader(pixel_t input) : SV_Target
 		{
 			UNITY_SETUP_INSTANCE_ID(input);
 
@@ -286,7 +289,7 @@ SubShader {
 			faceColor.rgb *= 1-(dot(n, light)*_Diffuse);
 			faceColor.rgb *= lerp(_Ambient, 1, n.z*n.z);
 
-			fixed4 reflcol = texCUBE(_Cube, reflect(input.viewDir, -n));
+			half4 reflcol = texCUBE(_Cube, reflect(input.viewDir, -n));
 			faceColor.rgb += reflcol.rgb * lerp(_ReflectFaceColor.rgb, _ReflectOutlineColor.rgb, saturate(sd + outline * 0.5)) * faceColor.a;
 		    #endif
 

@@ -4,6 +4,12 @@
 [submodule "Assets/Plugins/ManagedBass"]
 	path = Assets/Plugins/ManagedBass
 	url = https://github.com/TeamMajdata/ManagedBass.git
-[submodule "Assets/Plugins/UniTask"]
-	path = Assets/Plugins/UniTask
+[submodule "Assets/Plugins/MajRadar"]
+	path = Assets/Plugins/MajRadar
+	url = https://github.com/TeamMajdata/MajRadar
+[submodule "Assets/Plugins/FFmpeg.AutoGen"]
+	path = ThirdParty/FFmpeg.AutoGen
+	url = https://github.com/TeamMajdata/FFmpeg.AutoGen.git
+[submodule "ThirdParty/UniTask"]
+	path = ThirdParty/UniTask
 	url = https://github.com/TeamMajdata/UniTask.git

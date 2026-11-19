@@ -1,5 +1,6 @@
 using MajdataPlay.Buffers;
 using MajdataPlay.Collections;
+using MajdataPlay.Diagnostics;
 using MajdataPlay.Extensions;
 using MajdataPlay.IO;
 using MajdataPlay.Settings;
@@ -26,12 +27,12 @@ namespace MajdataPlay.Scenes.Game.Notes.Controllers
         bool _isTouchHoldRiserPlaying = false;
 
         Memory<AnswerSoundPoint> _answerTimingPoints = Memory<AnswerSoundPoint>.Empty;
-        AnswerSoundPoint[] _rentedArrayForAnswerSoundPoints = Array.Empty<AnswerSoundPoint>();
+        PooledArray<AnswerSoundPoint> _rentedArrayForAnswerSoundPoints = default;
 
-        readonly static bool[] _noteSFXPlaybackRequests = new bool[14];
-        readonly static AudioSampleWrap[] _noteSFXs = new AudioSampleWrap[14];
+        readonly static bool[] _noteSFXPlaybackRequests = new bool[16];
+        readonly static AudioSampleWrap[] _noteSFXs = new AudioSampleWrap[16];
         readonly AudioManager _audioManager = MajInstances.AudioManager;
-        static readonly ReadOnlyMemory<string> SFX_NAMES = new string[14]
+        static readonly ReadOnlyMemory<string> SFX_NAMES = new string[16]
         {
             "tap_perfect.wav",
             "tap_great.wav",
@@ -46,7 +47,9 @@ namespace MajdataPlay.Scenes.Game.Notes.Controllers
             "touch_Hold_riser.wav",
             "touch_hanabi.wav",
             "answer.wav",
-            "answer_clock.wav"
+            "answer_clock.wav",
+            "answer_mine.wav",
+            "tap_miss.wav"
         };
         const float ANSWER_PLAYBACK_OFFSET_SEC = -(16.66666f * 1) / 1000;
         const int TAP_PERFECT = 0;
@@ -63,6 +66,8 @@ namespace MajdataPlay.Scenes.Game.Notes.Controllers
         const int FIREWORK = 11;
         const int ANSWER = 12;
         const int ANSWER_CLOCK = 13;
+        const int MINE = 14;
+        const int MISS = 15;
 
         float _answerOffsetSec = 0;
 
@@ -82,14 +87,15 @@ namespace MajdataPlay.Scenes.Game.Notes.Controllers
                     _noteSFXs[i] = sfx;
                 }
             }
-            var settings = MajEnv.Settings;
-            if (settings.Debug.OffsetUnit == OffsetUnitOption.Second)
+            var userSettings = MajEnv.UserSettings;
+            var systemSettings = MajEnv.SystemSettings;
+            if (userSettings.Judge.OffsetUnit == OffsetUnitOption.Second)
             {
-                _answerOffsetSec = settings.Judge.AnswerOffset + settings.Debug.DisplayOffset;
+                _answerOffsetSec = userSettings.Judge.AnswerOffset + systemSettings.Debug.DisplayOffset;
             }
             else
             {
-                _answerOffsetSec = (settings.Judge.AnswerOffset + settings.Debug.DisplayOffset) * MajEnv.FRAME_LENGTH_SEC;
+                _answerOffsetSec = (userSettings.Judge.AnswerOffset + systemSettings.Debug.DisplayOffset) * MajEnv.FRAME_LENGTH_SEC;
             }
         }
         private void Start()
@@ -106,8 +112,8 @@ namespace MajdataPlay.Scenes.Game.Notes.Controllers
             }
             Array.Clear(_noteSFXPlaybackRequests, 0, _noteSFXPlaybackRequests.Length);
             Array.Clear(_noteSFXs, 0, _noteSFXs.Length);
-            Pool<AnswerSoundPoint>.ReturnArray(_rentedArrayForAnswerSoundPoints, true);
-            _rentedArrayForAnswerSoundPoints = Array.Empty<AnswerSoundPoint>();
+            _rentedArrayForAnswerSoundPoints.Dispose();
+            _rentedArrayForAnswerSoundPoints = default;
             _answerTimingPoints = Memory<AnswerSoundPoint>.Empty;
         }
         [Il2CppSetOption(Option.NullChecks, false)]
@@ -231,6 +237,18 @@ namespace MajdataPlay.Scenes.Game.Notes.Controllers
                                 _noteSFXs[ANSWER_CLOCK].PlayOneShot();
                             }
                             break;
+                        case MINE:
+                            if (isRequested)
+                            {
+                                _noteSFXs[MINE].PlayOneShot();
+                            }
+                            break;
+                        case MISS:
+                            if (isRequested)
+                            {
+                                _noteSFXs[MISS].PlayOneShot();
+                            }
+                            break;
                     }
                 }
             }
@@ -250,7 +268,7 @@ namespace MajdataPlay.Scenes.Game.Notes.Controllers
                 var thisFrameSec = _noteController.ThisFrameSec;
                 var offset = ANSWER_PLAYBACK_OFFSET_SEC;
                 var i = 0;
-                for (; i < timingPoints.Length; i++)
+                for (; i < timingPoints.Length; )
                 {
                     ref var sfxInfo = ref _answerTimingPoints.Span[i];
                     var playTiming = sfxInfo.Timing;
@@ -265,15 +283,18 @@ namespace MajdataPlay.Scenes.Game.Notes.Controllers
                         }
                         else
                         {
-                            _noteSFXPlaybackRequests[ANSWER] = true;
+                            _noteSFXPlaybackRequests[ANSWER] = sfxInfo.IsNormal;
+                            _noteSFXPlaybackRequests[MINE] = sfxInfo.IsMine;
                         }
+                        _answerTimingPoints = _answerTimingPoints.Slice(i + 1);
+                        return;
                     }
                     else
                     {
                         break;
                     }
                 }
-                _answerTimingPoints = _answerTimingPoints.Slice(i);
+                
             }
             catch (Exception e)
             {
@@ -285,8 +306,16 @@ namespace MajdataPlay.Scenes.Game.Notes.Controllers
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         public void PlayTapSound(in NoteJudgeResult judgeResult)
         {
-            if (judgeResult.IsMissOrTooFast)
+            if (judgeResult.IsMine && judgeResult.IsMissOrTooFast)
+            {
+                _noteSFXPlaybackRequests[MISS] = true;
                 return;
+            }
+
+            if (judgeResult.IsMissOrTooFast || judgeResult.IsMine)
+            {
+                return;
+            }
 
             var isBreak = judgeResult.IsBreak;
             var isEx = judgeResult.IsEX;
@@ -371,12 +400,12 @@ namespace MajdataPlay.Scenes.Game.Notes.Controllers
                 }
                 //Generate ClockSounds
                 var firstBpm = 0f;
-                if(!chart.NoteTimings.IsEmpty)
+                if (!chart.NoteTimings.IsEmpty)
                 {
                     firstBpm = chart.NoteTimings[0].Bpm;
                 }
                 var interval = 60 / firstBpm;
-                using RentedList<AnswerSoundPoint> answerTimingPoints = new();
+                using PooledList<AnswerSoundPoint> answerTimingPoints = new();
 
                 if (!isPracticeMode)
                 {
@@ -409,42 +438,109 @@ namespace MajdataPlay.Scenes.Game.Notes.Controllers
                 }
 
                 //Generate AnwserSounds
+                using var simaiTimingBuffer = new PooledList<SimaiTimingPoint>();
+                simaiTimingBuffer.AddRange(chart.NoteTimings);
+                var timings = simaiTimingBuffer.SelectMany(x =>
+                                          {
+                                              var timing = x.Timing + _answerOffsetSec;
+                                              using var buffer = new PooledList<AnswerSoundPoint>();
+                                              var isAnswer = false;
+                                              var isMine = false;
+                                              foreach (var note in x.Notes)
+                                              {
+                                                  // A slide path never answers by itself: the star head of a slide is
+                                                  // its own Tap note since MajSimai 3.0 and answers with its own mine
+                                                  // flag, and a slide without a head has nothing to answer.
+                                                  if(note.Type == SimaiNoteType.Slide)
+                                                  {
+                                                      continue;
+                                                  }
+                                                  if(note.IsMine)
+                                                  {
+                                                      isMine = true;
+                                                  }
+                                                  else
+                                                  {
+                                                      isAnswer = true;
+                                                  }
+                                                  var isHold = note.Type is SimaiNoteType.Hold or SimaiNoteType.TouchHold;
+                                                  if (isHold && note.HoldTime >= MajEnv.FRAME_LENGTH_SEC)
+                                                  {
+                                                      var holdEndTiming = (float)(timing + note.HoldTime);
+                                                      buffer.Add(new AnswerSoundPoint(holdEndTiming, false, note.IsMine, !note.IsMine)
+                                                      {
+                                                          IsPlayed = false
+                                                      });
+                                                  }
+                                              }
+                                              if(isAnswer || isMine)
+                                              {
+                                                  buffer.Add(new AnswerSoundPoint((float)timing, false, isMine, isAnswer)
+                                                  {
+                                                      IsPlayed = false
+                                                  });
+                                              }                                              
 
-                foreach (var timingPoint in chart.NoteTimings)
+                                              return buffer.ToArray();
+                                          })
+                                          .GroupBy(x => x.Timing)
+                                          .Select(x =>
+                                          {
+                                              var isMine = false;
+                                              var isNormal = false;
+                                              foreach (var point in x)
+                                              {
+                                                  if (point.IsMine)
+                                                  {
+                                                      isMine = true;
+                                                  }
+                                                  if (point.IsNormal)
+                                                  {
+                                                      isNormal = true;
+                                                  }
+                                              }
+                                              return new AnswerSoundPoint(x.Key, false, isMine, isNormal)
+                                              {
+                                                  IsPlayed = false
+                                              };
+                                          })
+                                          .OrderBy(x => x.Timing);
+                using (var timingBuffer = new PooledList<AnswerSoundPoint>())
                 {
-                    if (timingPoint.Notes.All(o => o.IsSlideNoHead))
+                    timingBuffer.AddRange(timings);
+                    for (var i = 0; i < timingBuffer.Count; i++)
                     {
-                        continue;
+                        var isLast = i == timingBuffer.Count - 1;
+                        var current = timingBuffer[i];
+                        if (current.IsClock)
+                        {
+                            continue;
+                        }
+                        else if (isLast)
+                        {
+                            break;
+                        }                        
+                        var next = timingBuffer[i + 1];
+                        var timingDiff = next.Timing - current.Timing;
+                        if (timingDiff < MajEnv.FRAME_LENGTH_SEC)
+                        {
+                            timingBuffer.RemoveAt(i + 1);
+                            current.IsMine |= next.IsMine;
+                            current.IsNormal |= next.IsNormal;
+                            timingBuffer[i] = current;
+                            i--;
+                        }                        
                     }
-                    var timing = (float)timingPoint.Timing + _answerOffsetSec;
-                    var isClock = false;
-                    answerTimingPoints.Add(new AnswerSoundPoint(timing, isClock)
-                    {
-                        IsPlayed = false
-                    });
-                    var holds = timingPoint.Notes.FindAll(o => o.Type == SimaiNoteType.Hold || o.Type == SimaiNoteType.TouchHold);
-                    if (holds.Length == 0)
-                    {
-                        continue;
-                    }
-                    foreach (var hold in holds)
-                    {
-                        var newTime = (float)(timingPoint.Timing + hold.HoldTime) + _answerOffsetSec;
-                        if (!chart.NoteTimings.Any(o => Math.Abs(o.Timing - newTime) < 0.001) &&
-                            !answerTimingPoints.Any(o => Math.Abs(o.Timing - newTime) < 0.001)
-                            )
-                            answerTimingPoints.Add(new AnswerSoundPoint(newTime, isClock)
-                            {
-                                IsPlayed = false
-                            });
-                    }
+                    answerTimingPoints.AddRange(timingBuffer);
                 }
-                _rentedArrayForAnswerSoundPoints = Pool<AnswerSoundPoint>.RentArray(answerTimingPoints.Count, true);
+
+                _rentedArrayForAnswerSoundPoints = Pool<AnswerSoundPoint>.Rent(answerTimingPoints.Count, true);
                 foreach(var (i, tp) in answerTimingPoints.OrderBy(o => o.Timing).WithIndex())
                 {
                     _rentedArrayForAnswerSoundPoints[i] = tp;
                 }
-                _answerTimingPoints = _rentedArrayForAnswerSoundPoints.AsMemory(0, answerTimingPoints.Capacity);
+                print("TimingPoint Count " + answerTimingPoints.Count);
+                _answerTimingPoints = _rentedArrayForAnswerSoundPoints.AsMemory(0, answerTimingPoints.Count);
                 FirstClockTiming = _answerTimingPoints.Span[0].Timing;
             });
         }
@@ -526,12 +622,16 @@ namespace MajdataPlay.Scenes.Game.Notes.Controllers
         {
             public readonly float Timing;
             public readonly bool IsClock;
+            public bool IsMine;
+            public bool IsNormal;
             public bool IsPlayed;
 
-            public AnswerSoundPoint(float timing, bool isClock)
+            public AnswerSoundPoint(float timing, bool isClock, bool isMine = false, bool isNormal = true)
             {
                 Timing = timing;
                 IsClock = isClock;
+                IsMine = isMine;
+                IsNormal = isNormal;
             }
         }
     }

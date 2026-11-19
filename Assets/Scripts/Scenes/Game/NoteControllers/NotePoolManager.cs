@@ -1,4 +1,5 @@
 ﻿using MajdataPlay.Buffers;
+using MajdataPlay.Diagnostics;
 using MajdataPlay.Scenes.Game.Buffers;
 using MajdataPlay.Scenes.Game.Notes.Behaviours;
 using MajdataPlay.Scenes.View;
@@ -34,11 +35,11 @@ namespace MajdataPlay.Scenes.Game.Notes.Controllers
         GameObject eachLinePrefab;
 
         INoteTimeProvider _noteTimeProvider;
-        RentedList<TapPoolingInfo> _tapInfos = new();
-        RentedList<HoldPoolingInfo> _holdInfos = new();
-        RentedList<TouchPoolingInfo> _touchInfos = new();
-        RentedList<TouchHoldPoolingInfo> _touchHoldInfos = new();
-        RentedList<EachLinePoolingInfo> _eachLineInfos = new();
+        PooledList<TapPoolingInfo> _tapInfos = new();
+        PooledList<HoldPoolingInfo> _holdInfos = new();
+        PooledList<TouchPoolingInfo> _touchInfos = new();
+        PooledList<TouchHoldPoolingInfo> _touchHoldInfos = new();
+        PooledList<EachLinePoolingInfo> _eachLineInfos = new();
         void Awake()
         {
             Majdata<NotePoolManager>.Instance = this;
@@ -46,7 +47,7 @@ namespace MajdataPlay.Scenes.Game.Notes.Controllers
         public void Init()
         {
             var noteLoader = Majdata<NoteLoader>.Instance!;
-            var debugOptions = MajEnv.Settings.Debug;
+            var debugOptions = MajEnv.SystemSettings.Debug;
             var isHadTap = false;
             var isHadHold = false;
             var isHadTouch = false;

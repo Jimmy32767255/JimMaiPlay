@@ -1,292 +1,259 @@
-﻿using Cysharp.Text;
-using MajdataPlay.Collections;
-using MajdataPlay.Extensions;
+using MajdataPlay.i18n;
 using MajdataPlay.IO;
-using MajdataPlay.Numerics;
 using MajdataPlay.Settings;
-using MajdataPlay.Settings.OptionEnumerators;
-using MajdataPlay.Utils;
-using System;
-using System.Linq;
-using System.Reflection;
+using System.Collections.Generic;
 using TMPro;
-using Topten.RichTextKit.Editor;
-using Unity.Collections;
 using UnityEngine;
 using UnityEngine.Serialization;
-using RangeAttribute = MajdataPlay.Settings.RangeAttribute;
 #nullable enable
 namespace MajdataPlay.Scenes.Setting
 {
     public class Option : MonoBehaviour
     {
-        public int Index { get; set; } 
-        public Menu Parent { get; set; }
-        public PropertyInfo PropertyInfo { get; set; }
-        public object OptionObject { get; set; }
-
         [SerializeField]
         [FormerlySerializedAs("nameText")]
-        TextMeshPro _nameText;
+        private TextMeshProUGUI _nameTextDisplayer = null!;
+
         [SerializeField]
         [FormerlySerializedAs("valueText")]
-        TextMeshPro _valueText;
-        [SerializeField]
-        [FormerlySerializedAs("descriptionText")]
-        TextMeshPro _descriptionText;
+        private TextMeshProUGUI _valueTextDisplayer = null!;
 
-        bool _isEnabled = false;
-        bool _isNum = false;
-        bool _isFloat = false;
-        bool _isReadOnly = false;
-        bool _isPressed = false;
-        bool _isUp = false;
-        bool _isNoDescription = false;
-        float _pressTime = 0;
+        private bool _isSelected;
+        private bool _isLocalizationSubscribed;
+        private string? _displayedName;
+        private string? _displayedValue;
+        private SettingTextTint? _nameTextTint;
+        private SettingTextTint? _valueTextTint;
+        private OptionData? _data;
+        private SettingManager _manager = null!;
+        private InputRepeatState _inputRepeat;
+        private OffsetUnitOption _descriptionOffsetUnit;
 
-        string _optionDescription = string.Empty;
-        string _optionName = string.Empty;
-
-        float _iterationThrottle = 0;
-        int _lastIndex = 0;
-
-        IOptionEnumerator _optionEnumerator;
-
-        public void Init()
+        internal void Bind(SettingManager manager, OptionData data)
         {
-            Localization.OnLanguageChanged += OnLangChanged;
-            InitOptions();
-            _nameText.text = _optionName.i18n();
-            if(_isNoDescription)
-            {
-                _descriptionText.text = string.Empty;
-            }
-            else
-            {
-                _descriptionText.text = _optionDescription.i18n();
-                switch (PropertyInfo.Name)
-                {
-                    case "SlideFadeInOffset":
-                    case "AudioOffset":
-                    case "JudgeOffset":
-                    case "AnswerOffset":
-                    case "TouchPanelOffset":
-                    case "DisplayOffset":
-                        _descriptionText.text = _optionDescription.i18n() + $"\n{$"MAJTEXT_SETTING_OFFSETUNIT_{MajEnv.Settings.Debug.OffsetUnit}".i18n()}";
-                        break;
-                }
-            }
-            UpdatePosition();
-            UpdateOption();
+            Unbind();
+            _manager = manager;
+            _data = data;
+            _nameTextTint ??= new SettingTextTint(_nameTextDisplayer);
+            _valueTextTint ??= new SettingTextTint(_valueTextDisplayer);
+            data.Refresh();
+            data.RefreshLocalization();
+            RefreshTexts();
+            SubscribeLocalization();
         }
-        void OnLangChanged(object? sender,Language newLanguage)
+
+        internal void Unbind()
         {
-            _nameText.text = _optionName.i18n();
-            _descriptionText.text = _optionDescription.i18n();
-            UpdateOption();
+            UnsubscribeLocalization();
+            _isSelected = false;
+            _inputRepeat.SuppressUntilRelease();
+            _data = null;
         }
-        void InitOptions()
+
+        internal void SetSelected(bool isSelected)
         {
-            var type = PropertyInfo.PropertyType;
-            _isFloat = type.IsFloatType();
-            _isNum = type.IsIntType() || _isFloat;
-            _isNoDescription = PropertyInfo.GetCustomAttribute<NoDescriptionAttribute>() is not null;
-            var optionNameAttr = PropertyInfo.GetCustomAttribute<OptionNameAttribute>();
-            var optionDescriptionAttr = PropertyInfo.GetCustomAttribute<DescriptionAttribute>();
-            var optionEnumeratorAttr = PropertyInfo.GetCustomAttribute<OptionEnumeratorAttribute>();
-            _optionName = optionNameAttr?.Name ?? $"MAJSETTING_PROPERTY_{PropertyInfo.Name}";
-
-            if(optionDescriptionAttr is not null)
-            {
-                _optionDescription = optionDescriptionAttr.Text;
-            }
-            else
-            {
-                _optionDescription = $"MAJSETTING_PROPERTY_{PropertyInfo.Name}_DESC";
-            }
-
-            if(optionEnumeratorAttr is not null)
-            {
-                var enumerator = default(IOptionEnumerator?);
-                try
-                {
-                    enumerator = optionEnumeratorAttr.Instance();
-                }
-                catch(Exception e)
-                {
-                    MajDebug.LogWarning($"[SettingUI]Failed to instantiate IOptionEnumerator specified by Attribute\nType: {optionEnumeratorAttr.EnumeratorType}\nException: {e}");
-                }
-                if(enumerator is null)
-                {
-                    MajDebug.LogWarning($"[SettingUI]Failed to instantiate IOptionEnumerator specified by Attribute\nType: {optionEnumeratorAttr.EnumeratorType}");
-                    _optionEnumerator = new DefaultReadOnlyEnumerator();
-                }
-                else
-                {
-                    _optionEnumerator = enumerator;
-                }
-            }
-            else
-            {
-                if (type.IsEnum)
-                {
-                    _optionEnumerator = new DefaultEnumEnumerator();
-                }
-                else if (type == typeof(bool) || type == typeof(bool?))
-                {
-                    _optionEnumerator = new DefaultBooleanEnumerator();
-                }
-                else if (_isNum)
-                {
-                    _optionEnumerator = new DefaultNumberEnumerator();
-                }
-                else // string
-                {
-                    _optionEnumerator = new DefaultReadOnlyEnumerator();
-                }
-            }
-            _optionEnumerator.Init(PropertyInfo, OptionObject);
-        }
-        void Update()
-        {
-            var currentIndex = Parent.SelectedIndex;
-
-            _optionEnumerator.OnUpdate();
-            if (currentIndex == Index && _isEnabled && !_isReadOnly)
-            {
-                var isE4OrB4On = InputManager.CheckSensorStatusInThisFrame(SensorArea.E4, SwitchStatus.On) ||
-                                 InputManager.CheckSensorStatusInThisFrame(SensorArea.B4, SwitchStatus.On);
-                var isE6OrB5On = InputManager.CheckSensorStatusInThisFrame(SensorArea.E6, SwitchStatus.On) ||
-                                 InputManager.CheckSensorStatusInThisFrame(SensorArea.B5, SwitchStatus.On);
-
-                if (_pressTime >= 0.4f)
-                {
-                    var iterationSpeed = MajEnv.Settings.Debug.MenuOptionIterationSpeed;
-                    if (_iterationThrottle <= 1f / (iterationSpeed is 0 ? 15 : iterationSpeed))
-                    {
-                        _iterationThrottle += MajTimeline.DeltaTime;
-                    }
-                    else
-                    {
-                        if (_isUp)
-                        {
-                            _optionEnumerator.MoveNext();
-                        }
-                        else
-                        {
-                            _optionEnumerator.MovePrevious();
-                        }
-                        _iterationThrottle = 0;
-                    }
-                }
-
-                if (_isPressed)
-                {
-                    if(_pressTime < 0.4f)
-                    {
-                        _pressTime += MajTimeline.DeltaTime;
-                    }
-                    if(isE4OrB4On)
-                    {
-                        _isUp = true;
-                    }
-                    else if(isE6OrB5On)
-                    {
-                        _isUp = false;
-                    }
-                    else
-                    {
-                        _isPressed = false;
-                        _pressTime = 0;
-                    }
-                }
-                else
-                {
-                    if (isE4OrB4On)
-                    {
-                        _optionEnumerator.MoveNext();
-                        _isUp = true;
-                        _isPressed = true;
-                    }
-                    else if (isE6OrB5On)
-                    {
-                        _optionEnumerator.MovePrevious();
-                        _isUp = false;
-                        _isPressed = true;
-                    }
-                }
-            }
-            UpdateOption();
-            if (_lastIndex == currentIndex)
+            if (_isSelected == isSelected)
             {
                 return;
             }
-            _lastIndex = currentIndex;
-            UpdatePosition();
-        }
-        void UpdatePosition()
-        {
-            var diff = _lastIndex - Index;
-            var scale = GetScale(diff);
-            var pos = GetPosition(diff);
-            transform.localPosition = pos;
-            transform.localScale = scale;
-        }
-        void UpdateOption()
-        {
-            _valueText.text = _optionEnumerator.LocalizedValueText;
-            switch (PropertyInfo.Name)
+            _inputRepeat.SuppressUntilRelease();
+            _isSelected = isSelected;
+            if (isSelected)
             {
-                case "SlideFadeInOffset":
-                case "AudioOffset":
-                case "JudgeOffset":
-                case "AnswerOffset":
-                case "TouchPanelOffset":
-                case "DisplayOffset":
-                    _descriptionText.text = _optionDescription.i18n() + $"\n{$"MAJTEXT_SETTING_OFFSETUNIT_{MajEnv.Settings.Debug.OffsetUnit}".i18n()}";
-                    break;
+                SetDescriptionText();
             }
         }
-        void OnDestroy()
+
+        internal void SetTextColor(Color newColor)
         {
-            _isEnabled = false;
+            _nameTextTint?.SetColor(newColor);
+            _valueTextTint?.SetColor(newColor);
+        }
+
+        internal void CollectFontAssets(HashSet<TMP_FontAsset> fonts)
+        {
+            if (_nameTextDisplayer.font != null)
+            {
+                fonts.Add(_nameTextDisplayer.font);
+            }
+            if (_valueTextDisplayer.font != null)
+            {
+                fonts.Add(_valueTextDisplayer.font);
+            }
+        }
+
+        internal void HandleInput()
+        {
+            if (!_isSelected || _data is null)
+            {
+                return;
+            }
+
+            // Synchronize before editing, too, so input starts from the latest setting.
+            RefreshIfChanged();
+            var moveNextPressed =
+                InputManager.CheckSensorStatusInThisFrame(SensorArea.E4, SwitchStatus.On) ||
+                InputManager.CheckSensorStatusInThisFrame(SensorArea.B4, SwitchStatus.On) ||
+                InputManager.CheckSensorStatusInThisFrame(SensorArea.B3, SwitchStatus.On);
+            var movePreviousPressed =
+                InputManager.CheckSensorStatusInThisFrame(SensorArea.E6, SwitchStatus.On) ||
+                InputManager.CheckSensorStatusInThisFrame(SensorArea.B5, SwitchStatus.On) ||
+                InputManager.CheckSensorStatusInThisFrame(SensorArea.B6, SwitchStatus.On);
+
+            if (_inputRepeat.Update(
+                moveNextPressed,
+                movePreviousPressed,
+                MajTimeline.DeltaTime,
+                0.4f,
+                GetRepeatInterval(),
+                out var direction))
+            {
+                var hasChanged = direction > 0 ? _data.MoveNext() : _data.MovePrevious();
+                if (hasChanged)
+                {
+                    RefreshTexts();
+                }
+            }
+        }
+
+        internal void RefreshEnumerator()
+        {
+            if (_data is null)
+            {
+                return;
+            }
+            _data.Refresh();
+            RefreshTexts();
+            RefreshDescriptionUnit();
+        }
+
+        private void LateUpdate()
+        {
+            RefreshIfChanged();
+            RefreshDescriptionUnit();
+        }
+
+        private void RefreshIfChanged()
+        {
+            if (_data is not null && _data.RefreshIfChanged())
+            {
+                RefreshTexts();
+            }
+        }
+
+        private void RefreshDescriptionUnit()
+        {
+            if (_isSelected && _data is not null && _data.IsOffsetOption &&
+                _descriptionOffsetUnit != MajEnv.UserSettings.Judge.OffsetUnit)
+            {
+                SetDescriptionText();
+            }
+        }
+
+        private void OnLangChanged(object? sender, Language newLanguage)
+        {
+            if (_data is null)
+            {
+                return;
+            }
+            _data.RefreshLocalization();
+            RefreshTexts();
+            if (_isSelected)
+            {
+                SetDescriptionText();
+            }
+        }
+
+        private static float GetRepeatInterval()
+        {
+            var iterationSpeed = MajEnv.SystemSettings.Common.MenuOptionIterationSpeed;
+            return 1f / (iterationSpeed is 0 ? 15 : iterationSpeed);
+        }
+
+        private void SetDescriptionText()
+        {
+            if (_data is null)
+            {
+                return;
+            }
+            _descriptionOffsetUnit = MajEnv.UserSettings.Judge.OffsetUnit;
+            if (!_data.HasDescription)
+            {
+                _manager.SetDescriptionText(string.Empty);
+                return;
+            }
+
+            var description = _data.DescriptionKey.i18n();
+            if (_data.IsOffsetOption)
+            {
+                description += $"\n{$"MAJTEXT_SETTING_OFFSETUNIT_{_descriptionOffsetUnit}".i18n()}";
+            }
+            _manager.SetDescriptionText(description);
+        }
+
+        private void RefreshTexts()
+        {
+            if (_data is null)
+            {
+                return;
+            }
+            var name = _data.LocalizedName;
+            if (_displayedName != name)
+            {
+                _nameTextDisplayer.text = name;
+                _displayedName = name;
+            }
+            var value = _data.LocalizedValueText;
+            if (_displayedValue != value)
+            {
+                _valueTextDisplayer.text = value;
+                _displayedValue = value;
+            }
+        }
+
+        private void OnDestroy()
+        {
+            UnsubscribeLocalization();
+            _nameTextTint?.Dispose();
+            _valueTextTint?.Dispose();
+        }
+
+        private void OnEnable()
+        {
+            if (_data is null)
+            {
+                return;
+            }
+            SubscribeLocalization();
+            _data.RefreshIfChanged();
+            _data.RefreshLocalization();
+            RefreshTexts();
+        }
+
+        private void OnDisable()
+        {
+            UnsubscribeLocalization();
+            _inputRepeat.SuppressUntilRelease();
+        }
+
+        private void SubscribeLocalization()
+        {
+            if (_isLocalizationSubscribed || _data is null || !isActiveAndEnabled)
+            {
+                return;
+            }
+            Localization.OnLanguageChanged += OnLangChanged;
+            _isLocalizationSubscribed = true;
+        }
+
+        private void UnsubscribeLocalization()
+        {
+            if (!_isLocalizationSubscribed)
+            {
+                return;
+            }
             Localization.OnLanguageChanged -= OnLangChanged;
-            _optionEnumerator.Dispose();
-        }
-        void OnDisable()
-        {
-            _isEnabled = false;
-        }
-        void OnEnable()
-        {
-            _isEnabled = true;
-        }
-        Vector3 GetScale(int diff)
-        {
-            switch(diff)
-            {
-                case 1:
-                case -1:
-                    return new Vector3(0.6f, 0.6f, 0.6f);
-                case 0:
-                    return new Vector3(1, 1, 1);
-                default:
-                    return Vector3.zero;
-            }
-        }
-        Vector3 GetPosition(int diff)
-        {
-            switch (diff)
-            {
-                case 1:
-                    return new Vector3(-330, 0, 0);
-                case -1:
-                    return new Vector3(330, 0, 0);
-                case 0:
-                    return new Vector3(0, 0, 0);
-                default:
-                    return new Vector3(1000,0,0);
-            }
+            _isLocalizationSubscribed = false;
         }
     }
 }

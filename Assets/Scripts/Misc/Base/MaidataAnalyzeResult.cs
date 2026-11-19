@@ -7,13 +7,11 @@ using UnityEngine;
 #nullable enable
 namespace MajdataPlay
 {
-    internal class MaidataAnalyzeResult
+    internal readonly struct MaidataAnalyzeResult
     {
-        public float PeakDensity { get; init; }
-        public float Esti { get; init; }
         public TimeSpan Length { get; init; }
         public float MaxBPM { get; init; }
         public float MinBPM { get; init; }
-        public required Texture LineGraph { get; init; }
+        public Texture? LineGraph { get; init; }
     }
 }

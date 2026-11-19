@@ -1,9 +1,3 @@
-﻿using System;
-using System.Collections.Generic;
-using System.Linq;
-using System.Text;
-using System.Threading.Tasks;
-using Unity.Collections.LowLevel.Unsafe;
 using UnityEngine;
 
 namespace MajdataPlay.Settings.OptionEnumerators;
@@ -11,8 +5,9 @@ public sealed class EngineNumberSettingEnumerator : DefaultNumberEnumerator, IOp
 {
     int _lastValue = 0;
 
-    public override void OnUpdate()
+    public override void Refresh()
     {
+        base.Refresh();
         if(_lastValue == CurrentValue)
         {
             return;
@@ -20,7 +15,7 @@ public sealed class EngineNumberSettingEnumerator : DefaultNumberEnumerator, IOp
         switch (Name)
         {
             case "FPSLimit":
-                Application.targetFrameRate = (int)CurrentValue;
+                GameManager.SetFrameRate((int)CurrentValue);
                 break;
         }
         _lastValue = (int)CurrentValue;

@@ -21,48 +21,36 @@ namespace MajdataPlay
         {
             [MethodImpl(MethodImplOptions.AggressiveInlining)]
             get => Majdata<GameManager>.Instance!;
-            [MethodImpl(MethodImplOptions.AggressiveInlining)]
-            set => Majdata<GameManager>.Instance = value;
-        }
-        public static GameSetting Settings
-        {
-            [MethodImpl(MethodImplOptions.AggressiveInlining)]
-            get => MajEnv.Settings;
         }
         public static AudioManager AudioManager
         {
             [MethodImpl(MethodImplOptions.AggressiveInlining)]
             get => Majdata<AudioManager>.Instance!;
-            [MethodImpl(MethodImplOptions.AggressiveInlining)]
-            set => Majdata<AudioManager>.Instance = value;
         }
         public static SkinManager SkinManager
         {
             [MethodImpl(MethodImplOptions.AggressiveInlining)]
             get => Majdata<SkinManager>.Instance!;
-            [MethodImpl(MethodImplOptions.AggressiveInlining)]
-            set => Majdata<SkinManager>.Instance = value;
         }
         public static SceneSwitcher SceneSwitcher
         {
             [MethodImpl(MethodImplOptions.AggressiveInlining)]
             get => Majdata<SceneSwitcher>.Instance!;
+        }
+        public static BackgroundVideoController BackgroundVideo
+        {
             [MethodImpl(MethodImplOptions.AggressiveInlining)]
-            set => Majdata<SceneSwitcher>.Instance = value;
+            get => Majdata<BackgroundVideoController>.Instance!;
         }
         internal static GameUpdater GameUpdater
         {
             [MethodImpl(MethodImplOptions.AggressiveInlining)]
             get => Majdata<GameUpdater>.Instance!;
-            [MethodImpl(MethodImplOptions.AggressiveInlining)]
-            set => Majdata<GameUpdater>.Instance = value;
         }
-        internal static FPSDisplayer FPSDisplayer
+        internal static RuntimeInfoDisplayer RuntimeInfoDisplayer
         {
             [MethodImpl(MethodImplOptions.AggressiveInlining)]
-            get => Majdata<FPSDisplayer>.Instance!;
-            [MethodImpl(MethodImplOptions.AggressiveInlining)]
-            set => Majdata<FPSDisplayer>.Instance = value;
+            get => Majdata<RuntimeInfoDisplayer>.Instance!;
         }
     }
 }

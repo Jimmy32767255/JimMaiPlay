@@ -20,6 +20,10 @@ namespace MajdataPlay.Editor
 
         private const string SettingsBundleSourcePath = "Assets/Plugins/iOS/Settings.bundle";
         private const string SettingsBundleName = "Settings.bundle";
+        private const string ZlibLibrary = "libz.tbd";
+        private const string ThermalSourceRelativePath = "Classes/UnityAppController+Thermal.mm";
+        private const string ThermalFrameRateMethodSignature =
+            "- (int)adjustFrameRateForThermalState:(int)targetFPS";
 
         [PostProcessBuild(45)]
         public static void OnPostprocessBuild(BuildTarget buildTarget, string path)
@@ -29,12 +33,95 @@ namespace MajdataPlay.Editor
                 return;
             }
 
-            UpdateRunpathSearchPaths(path);
+            DisableUnityThermalFrameRateOverride(path);
+            UpdateLinkSettings(path);
             UpdateInfoPlist(path);
             AddSettingsBundle(path);
         }
 
-        private static void UpdateRunpathSearchPaths(string path)
+        private static void DisableUnityThermalFrameRateOverride(string buildPath)
+        {
+            string thermalSourcePath = Path.Combine(buildPath, ThermalSourceRelativePath);
+            if (!File.Exists(thermalSourcePath))
+            {
+                Debug.Log("iOS thermal FPS patch skipped: generated thermal source was not found.");
+                return;
+            }
+
+            string source = File.ReadAllText(thermalSourcePath);
+            if (!TryPatchThermalFrameRateMethod(source, out string patchedSource))
+            {
+                Debug.LogWarning(
+                    "iOS thermal FPS patch skipped: expected generated method signature was not found.");
+                return;
+            }
+
+            File.WriteAllText(thermalSourcePath, patchedSource);
+            Debug.Log("iOS thermal FPS patch applied: Unity's native thermal FPS cap is disabled.");
+        }
+
+        private static bool TryPatchThermalFrameRateMethod(string source, out string patchedSource)
+        {
+            patchedSource = source;
+
+            int methodStart = source.IndexOf(
+                ThermalFrameRateMethodSignature,
+                StringComparison.Ordinal);
+            if (methodStart < 0)
+            {
+                return false;
+            }
+
+            int bodyStart = source.IndexOf('{', methodStart);
+            if (bodyStart < 0)
+            {
+                return false;
+            }
+
+            int bodyEnd = FindMatchingBrace(source, bodyStart);
+            if (bodyEnd < 0)
+            {
+                return false;
+            }
+
+            const string replacement =
+                "- (int)adjustFrameRateForThermalState:(int)targetFPS\n" +
+                "{\n" +
+                "    return targetFPS;\n" +
+                "}";
+
+            patchedSource = source.Substring(0, methodStart)
+                + replacement
+                + source.Substring(bodyEnd + 1);
+            return true;
+        }
+
+        private static int FindMatchingBrace(string source, int openingBraceIndex)
+        {
+            int depth = 0;
+            for (int i = openingBraceIndex; i < source.Length; i++)
+            {
+                switch (source[i])
+                {
+                    case '{':
+                        depth++;
+                        break;
+
+                    case '}':
+                        depth--;
+                        if (depth == 0)
+                        {
+                            return i;
+                        }
+
+                        break;
+                }
+            }
+
+            return -1;
+        }
+
+        private static void UpdateLinkSettings(string path)
         {
             string projPath = PBXProject.GetPBXProjectPath(path);
             if (!File.Exists(projPath))
@@ -53,6 +140,7 @@ namespace MajdataPlay.Editor
             if (!string.IsNullOrEmpty(frameworkTarget))
             {
                 AddRunpathSearchPaths(proj, frameworkTarget);
+                proj.AddFrameworkToProject(frameworkTarget, ZlibLibrary, false);
             }
 
             File.WriteAllText(projPath, proj.WriteToString());

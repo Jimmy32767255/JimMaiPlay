@@ -1,4 +1,5 @@
 using Cysharp.Threading.Tasks;
+using MajdataPlay.Diagnostics;
 using MajdataPlay.Editor;
 using MajdataPlay.IO;
 using MajdataPlay.Numerics;
@@ -29,6 +30,7 @@ namespace MajdataPlay.Scenes.Game.Notes.Controllers
         TouchUpdater _touchUpdater;
         TouchHoldUpdater _touchHoldUpdater;
         EachLineUpdater _eachLineUpdater;
+        SlideOKUpdater _slideOKUpdater;
 
         readonly int[] _noteCurrentIndex = new int[8];
         readonly int[] _touchCurrentIndex = new int[33];
@@ -77,7 +79,7 @@ namespace MajdataPlay.Scenes.Game.Notes.Controllers
         const string SENSOR_OUT_OF_RANGE = "Sensor index requested by Note is out of range";
         const string BUTTON_IS_NULL = "Button index requested by Note is null";
         const string BUTTON_OUT_OF_RANGE = "Button index requested by Note is out of range";
-        readonly bool USERSETTING_IS_AUTOPLAY = (MajEnv.Settings?.Mod.AutoPlay ?? AutoplayModeOption.Disable) != AutoplayModeOption.Disable;
+        readonly bool USERSETTING_IS_AUTOPLAY = (MajEnv.SystemSettings?.Mod.AutoPlay ?? AutoplayModeOption.Disable) != AutoplayModeOption.Disable;
 
         void Awake()
         {
@@ -110,6 +112,7 @@ namespace MajdataPlay.Scenes.Game.Notes.Controllers
             _touchUpdater = Majdata<TouchUpdater>.Instance!;
             _touchHoldUpdater = Majdata<TouchHoldUpdater>.Instance!;
             _eachLineUpdater = Majdata<EachLineUpdater>.Instance!;
+            _slideOKUpdater = Majdata<SlideOKUpdater>.Instance!;
 #if !(UNITY_ANDROID || UNITY_IOS)
             _isUseButtonRingForTouch = Majdata<INoteController>.Instance?.ModInfo.ButtonRingForTouch ?? false;
 #endif
@@ -119,7 +122,8 @@ namespace MajdataPlay.Scenes.Game.Notes.Controllers
             Majdata<NoteManager>.Free();
         }
 
-        
+        [Il2CppSetOption(Option.NullChecks, false)]
+        [Il2CppSetOption(Option.ArrayBoundsChecks, false)]
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         internal void OnPreUpdate()
         {
@@ -171,6 +175,8 @@ namespace MajdataPlay.Scenes.Game.Notes.Controllers
 #endif
             }
         }
+        [Il2CppSetOption(Option.NullChecks, false)]
+        [Il2CppSetOption(Option.ArrayBoundsChecks, false)]
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         internal void OnUpdate()
         {
@@ -182,6 +188,7 @@ namespace MajdataPlay.Scenes.Game.Notes.Controllers
                 _touchUpdater.OnUpdate();
                 _touchHoldUpdater.OnUpdate();
                 _eachLineUpdater.OnUpdate();
+                _slideOKUpdater.OnUpdate();
 #if UNITY_EDITOR || DEBUG
                 _updateElapsedMs = 0;
                 _updateElapsedMs += _tapUpdater.UpdateElapsedMs;
@@ -190,9 +197,12 @@ namespace MajdataPlay.Scenes.Game.Notes.Controllers
                 _updateElapsedMs += _touchUpdater.UpdateElapsedMs;
                 _updateElapsedMs += _touchHoldUpdater.UpdateElapsedMs;
                 _updateElapsedMs += _eachLineUpdater.UpdateElapsedMs;
+                _updateElapsedMs += _slideOKUpdater.UpdateElapsedMs;
 #endif
             }
         }
+        [Il2CppSetOption(Option.NullChecks, false)]
+        [Il2CppSetOption(Option.ArrayBoundsChecks, false)]
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         internal void OnLateUpdate()
         {
@@ -204,6 +214,7 @@ namespace MajdataPlay.Scenes.Game.Notes.Controllers
                 _touchUpdater.OnLateUpdate();
                 _touchHoldUpdater.OnLateUpdate();
                 _eachLineUpdater.OnLateUpdate();
+                _slideOKUpdater.OnLateUpdate();
 #if UNITY_EDITOR || DEBUG
                 _lateUpdateElapsedMs = 0;
                 _lateUpdateElapsedMs += _tapUpdater.LateUpdateElapsedMs;
@@ -212,9 +223,12 @@ namespace MajdataPlay.Scenes.Game.Notes.Controllers
                 _lateUpdateElapsedMs += _touchUpdater.LateUpdateElapsedMs;
                 _lateUpdateElapsedMs += _touchHoldUpdater.LateUpdateElapsedMs;
                 _lateUpdateElapsedMs += _eachLineUpdater.LateUpdateElapsedMs;
+                _lateUpdateElapsedMs += _slideOKUpdater.LateUpdateElapsedMs;
 #endif
             }
         }
+        [Il2CppSetOption(Option.NullChecks, false)]
+        [Il2CppSetOption(Option.ArrayBoundsChecks, false)]
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         internal void OnFixedUpdate()
         {
@@ -239,23 +253,22 @@ namespace MajdataPlay.Scenes.Game.Notes.Controllers
         }
         public async UniTask InitAsync()
         {
-            await UniTask.WhenAll(
-                _tapUpdater.InitAsync(),
-                _holdUpdater.InitAsync(),
-                _slideUpdater.InitAsync(),
-                _touchUpdater.InitAsync(),
-                _touchHoldUpdater.InitAsync(),
-                _eachLineUpdater.InitAsync()
-            );
+            _tapUpdater.Init();
+            _holdUpdater.Init();
+            _slideUpdater.Init();
+            _touchUpdater.Init();
+            _touchHoldUpdater.Init();
+            _eachLineUpdater.Init();
+            _slideOKUpdater.Init();
         }
         internal void Clear()
         {
-            _tapUpdater.Clear();
-            _holdUpdater.Clear();
-            _slideUpdater.Clear();
-            _touchUpdater.Clear();
-            _touchHoldUpdater.Clear();
-            _eachLineUpdater.Clear();
+            //_tapUpdater.Clear();
+            //_holdUpdater.Clear();
+            //_slideUpdater.Clear();
+            //_touchUpdater.Clear();
+            //_touchHoldUpdater.Clear();
+            //_eachLineUpdater.Clear();
 
             Array.Fill(_btnStatusInNextFrame, SwitchStatus.Off);
             Array.Fill(_btnStatusInThisFrame, SwitchStatus.Off);
