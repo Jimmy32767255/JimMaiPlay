@@ -57,7 +57,7 @@ namespace MajdataPlay.Tests.Game.Misc.i18n
             };
         }
 
-        /// <summary>Checks that the four bundled language files are loaded once from Resources/Langs.</summary>
+        /// <summary>Checks that the bundled language files are loaded once from Resources/Langs.</summary>
         [Test]
         public void Init_LoadsBundledLanguages()
         {
@@ -68,7 +68,7 @@ namespace MajdataPlay.Tests.Game.Misc.i18n
             var loaded = Localization.Available;
             Localization.Init();
 
-            Assert.That(loaded.Select(language => language.Code), Is.EquivalentTo(new[] { "en-US", "ja-JP", "zh-CN", "zh-TW" }));
+            Assert.That(loaded.Select(language => language.Code), Is.EquivalentTo(new[] { "en-US", "ja-JP", "zh-CN", "zh-TW", "zh-CHS-Jimmy" }));
             Assert.That(Localization.Available, Is.SameAs(loaded));
             foreach (var language in loaded)
             {
@@ -111,9 +111,9 @@ namespace MajdataPlay.Tests.Game.Misc.i18n
             }
 
             var text = writer.ToString();
-            Assert.That(text, Does.Contain("[I][Localization]Scanning 4 language files: Langs/en-US, Langs/ja-JP, Langs/zh-CN, Langs/zh-TW"));
+            Assert.That(text, Does.Contain("[I][Localization]Scanning 5 language files: Langs/en-US, Langs/ja-JP, Langs/zh-CN, Langs/zh-TW, Langs/zh-CHS-Jimmy"));
             Assert.That(text, Does.Contain("[D][Localization]Lang file loaded: Langs/en-US"));
-            Assert.That(text, Does.Contain("[I][Localization]Loaded 4 language files: en-US, ja-JP, zh-CN, zh-TW"));
+            Assert.That(text, Does.Contain("[I][Localization]Loaded 5 language files: en-US, ja-JP, zh-CN, zh-TW, zh-CHS-Jimmy"));
         }
 
         /// <summary>Checks that the bundled languages translate the same keys as English.</summary>

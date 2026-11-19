@@ -1,4 +1,4 @@
-﻿using MajdataPlay.Buffers;
+using MajdataPlay.Buffers;
 using MajdataPlay.Collections;
 using MajdataPlay.Diagnostics;
 using MajdataPlay.Extensions;
@@ -67,6 +67,7 @@ namespace MajdataPlay.i18n
                     "Langs/ja-JP",
                     "Langs/zh-CN",
                     "Langs/zh-TW",
+                    "Langs/zh-CHS-Jimmy",
                 };
                 MajDebug.LogInfo(nameof(Localization), $"Scanning {files.Count} language files: {string.Join(", ", files)}");
                 List<Language> loadedLangs = new();
